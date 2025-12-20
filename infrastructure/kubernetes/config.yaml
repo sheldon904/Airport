@@ -1,0 +1,29 @@
+# ConfigMap for non-sensitive configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: airport-config
+  namespace: airport
+data:
+  ENVIRONMENT: "production"
+  DEBUG: "false"
+  STORAGE_BUCKET: "airport-documents"
+  AWS_REGION: "us-east-1"
+  AGENT_TIMEOUT_SECONDS: "300"
+  EXTRACTION_CONFIDENCE_THRESHOLD: "0.85"
+  REQUIRE_HUMAN_REVIEW_BELOW: "0.70"
+---
+# Secret template (values should be injected via sealed-secrets or external-secrets)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: airport-secrets
+  namespace: airport
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql+asyncpg://user:password@host:5432/airport"
+  REDIS_URL: "redis://host:6379/0"
+  ANTHROPIC_API_KEY: "sk-ant-xxx"
+  SECRET_KEY: "change-me-in-production"
+  AWS_ACCESS_KEY_ID: "xxx"
+  AWS_SECRET_ACCESS_KEY: "xxx"

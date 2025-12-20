@@ -1,0 +1,118 @@
+# Agent Deployments - Scaled independently based on queue depth
+
+# Document Extract Agent
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-document-extract
+  namespace: airport
+  labels:
+    app: airport
+    component: agent
+    agent-type: document-extract
+spec:
+  # Start with 1 replica, scale based on queue
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airport
+      agent-type: document-extract
+  template:
+    metadata:
+      labels:
+        app: airport
+        component: agent
+        agent-type: document-extract
+    spec:
+      containers:
+        - name: agent
+          image: airport/agent-document-extract:latest
+          envFrom:
+            - secretRef:
+                name: airport-secrets
+            - configMapRef:
+                name: airport-config
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+---
+# Deadline Agent
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-deadline
+  namespace: airport
+  labels:
+    app: airport
+    component: agent
+    agent-type: deadline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airport
+      agent-type: deadline
+  template:
+    metadata:
+      labels:
+        app: airport
+        component: agent
+        agent-type: deadline
+    spec:
+      containers:
+        - name: agent
+          image: airport/agent-deadline:latest
+          envFrom:
+            - secretRef:
+                name: airport-secrets
+            - configMapRef:
+                name: airport-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+# Horizontal Pod Autoscaler for Document Extract Agent
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-document-extract-hpa
+  namespace: airport
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-document-extract
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: redis_stream_length
+          selector:
+            matchLabels:
+              stream: document-extract-queue
+        target:
+          type: AverageValue
+          averageValue: "5"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
