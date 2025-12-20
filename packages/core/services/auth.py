@@ -316,4 +316,87 @@ class AuthService:
 
         return True
 
-    # TODO: Implement password reset flow with email tokens
+    def create_password_reset_token(self, user: UserModel) -> str:
+        """Create a password reset token valid for 1 hour."""
+        expires = datetime.utcnow() + timedelta(hours=1)
+
+        payload = {
+            "sub": str(user.id),
+            "email": user.email,
+            "type": "password_reset",
+            "exp": expires,
+        }
+
+        return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
+
+    async def request_password_reset(self, email: str) -> tuple[UserModel, str] | None:
+        """
+        Request a password reset for an email.
+
+        Returns user and reset token if email exists, None otherwise.
+        Always returns quickly to prevent email enumeration.
+        """
+        user = await self.user_repo.get_by_email(email.lower())
+
+        if not user or not user.is_active:
+            return None
+
+        token = self.create_password_reset_token(user)
+        return user, token
+
+    async def reset_password(self, token: str, new_password: str) -> bool:
+        """
+        Reset password using a valid reset token.
+
+        Returns True if successful, False if token invalid or expired.
+        """
+        payload = self.decode_token(token)
+
+        if not payload:
+            return False
+
+        if payload.get("type") != "password_reset":
+            return False
+
+        user_id = payload.get("sub")
+        if not user_id:
+            return False
+
+        user = await self.user_repo.get_by_id(UUID(user_id))
+        if not user or not user.is_active:
+            return False
+
+        # Verify email matches (extra security check)
+        if user.email != payload.get("email"):
+            return False
+
+        await self.user_repo.update(
+            user.id,
+            hashed_password=self.hash_password(new_password),
+        )
+
+        return True
+
+    async def validate_reset_token(self, token: str) -> UserModel | None:
+        """
+        Validate a password reset token and return the associated user.
+
+        Returns None if token is invalid.
+        """
+        payload = self.decode_token(token)
+
+        if not payload:
+            return None
+
+        if payload.get("type") != "password_reset":
+            return None
+
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+
+        user = await self.user_repo.get_by_id(UUID(user_id))
+        if not user or not user.is_active:
+            return None
+
+        return user

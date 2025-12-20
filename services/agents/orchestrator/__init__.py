@@ -1,1 +1,5 @@
-"""Agent orchestrator - coordinates agent execution and event routing."""
+"""Agent orchestrator for workflow coordination."""
+
+from .coordinator import AgentOrchestrator, Workflow, WorkflowStep
+
+__all__ = ["AgentOrchestrator", "Workflow", "WorkflowStep"]
