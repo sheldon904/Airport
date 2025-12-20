@@ -5,8 +5,9 @@ from typing import Any, Sequence
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
-from packages.db.models import DocumentModel
+from packages.db.models import DocumentModel, TransactionModel
 from packages.db.repositories.base import BaseRepository
 
 
@@ -55,11 +56,16 @@ class DocumentRepository(BaseRepository[DocumentModel]):
         organization_id: UUID | None = None,
     ) -> Sequence[DocumentModel]:
         """Get documents that need human review."""
-        query = select(self.model).where(
-            self.model.status == "needs_review"
+        query = (
+            select(self.model)
+            .join(TransactionModel, self.model.transaction_id == TransactionModel.id)
+            .where(self.model.status == "needs_review")
         )
 
-        # TODO: Join with transactions to filter by org
+        if organization_id:
+            query = query.where(TransactionModel.organization_id == organization_id)
+
+        query = query.order_by(self.model.uploaded_at.desc())
 
         result = await self.session.execute(query)
         return result.scalars().all()

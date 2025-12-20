@@ -1,10 +1,10 @@
 """Transaction repository."""
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Sequence
 from uuid import UUID
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import selectinload
 
 from packages.db.models import TransactionModel, DocumentModel, DeadlineModel, ChecklistModel
@@ -75,14 +75,14 @@ class TransactionRepository(BaseRepository[TransactionModel]):
     ) -> Sequence[TransactionModel]:
         """Get active transactions with closing dates within N days."""
         today = date.today()
-        future_date = date.today().replace(day=today.day + within_days)
+        future_date = today + timedelta(days=within_days)
 
         result = await self.session.execute(
             select(self.model)
             .where(
                 and_(
                     self.model.organization_id == organization_id,
-                    self.model.status == "active",
+                    self.model.status.in_(["active", "pending_close"]),
                     self.model.closing_date != None,
                     self.model.closing_date <= future_date,
                     self.model.closing_date >= today,
@@ -124,3 +124,24 @@ class TransactionRepository(BaseRepository[TransactionModel]):
         if status:
             filters["status"] = status
         return await self.count(**filters)
+
+    async def count_closed_this_month(
+        self,
+        organization_id: UUID,
+    ) -> int:
+        """Count transactions closed in the current month."""
+        today = date.today()
+        first_of_month = today.replace(day=1)
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(self.model)
+            .where(
+                and_(
+                    self.model.organization_id == organization_id,
+                    self.model.status == "closed",
+                    self.model.updated_at >= first_of_month,
+                )
+            )
+        )
+        return result.scalar() or 0

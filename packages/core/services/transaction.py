@@ -295,8 +295,8 @@ class TransactionService:
         pending_close = await self.transaction_repo.count_by_organization(
             organization_id, status=TransactionStatus.PENDING_CLOSE
         )
-        closed_count = await self.transaction_repo.count_by_organization(
-            organization_id, status=TransactionStatus.CLOSED
+        closed_this_month = await self.transaction_repo.count_closed_this_month(
+            organization_id
         )
 
         upcoming_closings = await self.transaction_repo.get_active_with_upcoming_closing(
@@ -307,7 +307,7 @@ class TransactionService:
             "active_transactions": active + pending_close,
             "pending_review": pending,
             "closing_soon": len(upcoming_closings),
-            "closed_this_month": closed_count,  # TODO: Filter by date
+            "closed_this_month": closed_this_month,
             "upcoming_closings": [
                 {
                     "id": str(t.id),

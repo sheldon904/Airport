@@ -1,12 +1,12 @@
 """Deadline repository."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Sequence
 from uuid import UUID
 
 from sqlalchemy import and_, select
 
-from packages.db.models import DeadlineModel
+from packages.db.models import DeadlineModel, TransactionModel
 from packages.db.repositories.base import BaseRepository
 
 
@@ -43,17 +43,22 @@ class DeadlineRepository(BaseRepository[DeadlineModel]):
     ) -> Sequence[DeadlineModel]:
         """Get upcoming deadlines within N days."""
         today = date.today()
-        future = date.today().replace(day=today.day + days_ahead)
+        future = today + timedelta(days=days_ahead)
 
-        query = select(self.model).where(
-            and_(
-                self.model.due_date >= today,
-                self.model.due_date <= future,
-                self.model.status.in_(["upcoming", "due_soon"]),
+        query = (
+            select(self.model)
+            .join(TransactionModel, self.model.transaction_id == TransactionModel.id)
+            .where(
+                and_(
+                    self.model.due_date >= today,
+                    self.model.due_date <= future,
+                    self.model.status.in_(["upcoming", "due_soon"]),
+                )
             )
         )
 
-        # TODO: Join with transactions to filter by org
+        if organization_id:
+            query = query.where(TransactionModel.organization_id == organization_id)
 
         query = query.order_by(self.model.due_date)
 
@@ -67,12 +72,21 @@ class DeadlineRepository(BaseRepository[DeadlineModel]):
         """Get all overdue deadlines."""
         today = date.today()
 
-        query = select(self.model).where(
-            and_(
-                self.model.due_date < today,
-                self.model.status.in_(["upcoming", "due_soon", "overdue"]),
+        query = (
+            select(self.model)
+            .join(TransactionModel, self.model.transaction_id == TransactionModel.id)
+            .where(
+                and_(
+                    self.model.due_date < today,
+                    self.model.status.in_(["upcoming", "due_soon", "overdue"]),
+                )
             )
         )
+
+        if organization_id:
+            query = query.where(TransactionModel.organization_id == organization_id)
+
+        query = query.order_by(self.model.due_date)
 
         result = await self.session.execute(query)
         return result.scalars().all()
