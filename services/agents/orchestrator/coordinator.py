@@ -14,6 +14,10 @@ from services.agents.document_extract.agent import (
     DocumentExtractOutput,
 )
 from services.agents.deadline.agent import DeadlineAgent, DeadlineInput
+from services.agents.checklist.agent import ChecklistAgent, ChecklistInput
+from services.agents.communication.agent import CommunicationAgent, CommunicationInput, Recipient
+from services.agents.notification.agent import NotificationAgent, NotificationInput
+from services.agents.notification.models import NotificationChannel, NotificationPriority, NotificationType
 
 logger = structlog.get_logger()
 
@@ -23,7 +27,7 @@ class WorkflowStep(BaseModel):
 
     step_id: str
     agent_name: str
-    status: str = "pending"  # pending, running, completed, failed, needs_review
+    status: str = "pending"  # pending, running, completed, failed, needs_review, skipped
     started_at: datetime | None = None
     completed_at: datetime | None = None
     output: dict[str, Any] | None = None
@@ -59,6 +63,9 @@ class AgentOrchestrator:
         # Initialize agents
         self.document_extract_agent = DocumentExtractAgent()
         self.deadline_agent = DeadlineAgent()
+        self.checklist_agent = ChecklistAgent()
+        self.communication_agent = CommunicationAgent()
+        self.notification_agent = NotificationAgent()
 
     async def handle_document_uploaded(
         self,
@@ -69,6 +76,9 @@ class AgentOrchestrator:
         storage_path: str,
         filename: str,
         user_id: UUID | None = None,
+        property_year_built: int | None = None,
+        is_hoa: bool = False,
+        is_financed: bool = True,
     ) -> Workflow:
         """
         Handle a document upload event.
@@ -151,10 +161,33 @@ class AgentOrchestrator:
                 await self._run_deadline_calculation(
                     workflow, context, result.output
                 )
+            else:
+                workflow.steps[1].status = "skipped"
+
+            # Step 3: Update checklist
+            await self._run_checklist_update(
+                workflow,
+                context,
+                document_id,
+                document_type,
+                property_year_built,
+                is_hoa,
+                is_financed,
+            )
         else:
             workflow.steps[0].status = "failed"
             workflow.steps[0].error = result.error
             workflow.status = "failed"
+
+        # Mark workflow complete
+        if workflow.status != "failed":
+            all_complete = all(
+                s.status in ("completed", "skipped", "needs_review")
+                for s in workflow.steps
+            )
+            if all_complete:
+                workflow.status = "completed"
+                workflow.completed_at = datetime.now()
 
         return workflow
 
@@ -211,47 +244,385 @@ class AgentOrchestrator:
             workflow.steps[1].status = "failed"
             workflow.steps[1].error = result.error
 
+    async def _run_checklist_update(
+        self,
+        workflow: Workflow,
+        context: AgentContext,
+        document_id: UUID,
+        document_type: str,
+        property_year_built: int | None,
+        is_hoa: bool,
+        is_financed: bool,
+    ) -> None:
+        """Update checklist when document is uploaded."""
+        workflow.steps[2].status = "running"
+        workflow.steps[2].started_at = datetime.now()
+
+        checklist_input = ChecklistInput(
+            transaction_id=context.transaction_id,
+            document_id=document_id,
+            document_type=document_type,
+            action="document_uploaded",
+            property_year_built=property_year_built,
+            is_hoa=is_hoa,
+            is_financed=is_financed,
+        )
+
+        result = await self.checklist_agent.execute(context, checklist_input)
+
+        if result.success:
+            workflow.steps[2].status = "completed"
+            workflow.steps[2].completed_at = datetime.now()
+            workflow.steps[2].output = result.output.model_dump() if result.output else None
+        else:
+            workflow.steps[2].status = "failed"
+            workflow.steps[2].error = result.error
+
     async def handle_deadline_approaching(
         self,
         transaction_id: UUID,
+        organization_id: UUID,
         deadline_id: UUID,
+        deadline_name: str,
+        due_date: str,
         days_remaining: int,
-    ) -> None:
+        property_address: str,
+        user_id: UUID,
+        user_email: str,
+        user_name: str,
+    ) -> Workflow:
         """
         Handle a deadline approaching event.
 
         Triggers:
+        - CommunicationAgent to draft status update
         - NotificationAgent to send reminders
-        - CommunicationAgent to draft status update if needed
         """
+        workflow_id = uuid4()
+
         self.logger.info(
-            "deadline_approaching",
+            "deadline_approaching_workflow_started",
+            workflow_id=str(workflow_id),
             transaction_id=str(transaction_id),
             deadline_id=str(deadline_id),
             days_remaining=days_remaining,
         )
 
-        # TODO: Implement notification workflow
-        pass
+        workflow = Workflow(
+            id=workflow_id,
+            workflow_type="deadline_reminder",
+            transaction_id=transaction_id,
+            steps=[
+                WorkflowStep(step_id="communication", agent_name="communication"),
+                WorkflowStep(step_id="notification", agent_name="notification"),
+            ],
+            created_at=datetime.now(),
+        )
+
+        context = AgentContext(
+            execution_id=uuid4(),
+            transaction_id=transaction_id,
+            organization_id=organization_id,
+            user_id=user_id,
+            triggered_by="system",
+            triggered_at=datetime.now(),
+        )
+
+        # Step 1: Draft communication
+        workflow.steps[0].status = "running"
+        workflow.steps[0].started_at = datetime.now()
+
+        template_id = "deadline_urgent" if days_remaining <= 1 else "deadline_reminder"
+        comm_input = CommunicationInput(
+            transaction_id=transaction_id,
+            communication_type=template_id,
+            template_id=template_id,
+            recipients=[
+                Recipient(role="user", name=user_name, email=user_email),
+            ],
+            context={
+                "deadline_name": deadline_name,
+                "due_date": due_date,
+                "days_remaining": days_remaining,
+                "property_address": property_address,
+                "sender_name": "Airport TC",
+                "deadline_description": f"This deadline is due in {days_remaining} day(s).",
+            },
+        )
+
+        comm_result = await self.communication_agent.execute(context, comm_input)
+
+        if comm_result.success:
+            workflow.steps[0].status = "completed"
+            workflow.steps[0].completed_at = datetime.now()
+            workflow.steps[0].output = comm_result.output.model_dump() if comm_result.output else None
+        else:
+            workflow.steps[0].status = "failed"
+            workflow.steps[0].error = comm_result.error
+
+        # Step 2: Send notification
+        workflow.steps[1].status = "running"
+        workflow.steps[1].started_at = datetime.now()
+
+        notification_result = await self.notification_agent.send_deadline_reminder(
+            context=context,
+            user_id=user_id,
+            organization_id=organization_id,
+            transaction_id=transaction_id,
+            recipient_email=user_email,
+            deadline_name=deadline_name,
+            due_date=due_date,
+            days_remaining=days_remaining,
+            property_address=property_address,
+        )
+
+        workflow.steps[1].completed_at = datetime.now()
+        workflow.steps[1].output = notification_result.model_dump() if notification_result else None
+
+        if notification_result and notification_result.status.value in ("sent", "queued"):
+            workflow.steps[1].status = "completed"
+        else:
+            workflow.steps[1].status = "failed"
+            workflow.steps[1].error = notification_result.message if notification_result else "Unknown error"
+
+        # Emit event
+        await emit_event(
+            AgentEvent(
+                event_type="deadline.reminder_sent",
+                agent_name="orchestrator",
+                execution_id=context.execution_id,
+                transaction_id=transaction_id,
+                timestamp=datetime.now(),
+                payload={
+                    "deadline_id": str(deadline_id),
+                    "days_remaining": days_remaining,
+                    "notification_sent": workflow.steps[1].status == "completed",
+                },
+            )
+        )
+
+        workflow.status = "completed"
+        workflow.completed_at = datetime.now()
+
+        return workflow
 
     async def handle_review_completed(
         self,
         transaction_id: UUID,
+        organization_id: UUID,
         review_type: str,
+        resource_id: UUID,
         approved: bool,
         corrections: dict[str, Any] | None = None,
-    ) -> None:
+        reviewer_id: UUID | None = None,
+    ) -> Workflow:
         """
         Handle human review completion.
 
         Continues paused workflows or triggers corrective actions.
         """
+        workflow_id = uuid4()
+
         self.logger.info(
-            "review_completed",
+            "review_completed_workflow_started",
+            workflow_id=str(workflow_id),
             transaction_id=str(transaction_id),
             review_type=review_type,
             approved=approved,
         )
 
-        # TODO: Implement review continuation workflow
-        pass
+        workflow = Workflow(
+            id=workflow_id,
+            workflow_type="review_completed",
+            transaction_id=transaction_id,
+            steps=[
+                WorkflowStep(step_id="process_review", agent_name="orchestrator"),
+                WorkflowStep(step_id="update_checklist", agent_name="checklist"),
+            ],
+            created_at=datetime.now(),
+        )
+
+        context = AgentContext(
+            execution_id=uuid4(),
+            transaction_id=transaction_id,
+            organization_id=organization_id,
+            user_id=reviewer_id,
+            triggered_by="user",
+            triggered_at=datetime.now(),
+        )
+
+        workflow.steps[0].status = "running"
+        workflow.steps[0].started_at = datetime.now()
+
+        if review_type == "document":
+            # Document review completed
+            if approved:
+                # Update checklist to mark document as verified
+                workflow.steps[1].status = "running"
+                workflow.steps[1].started_at = datetime.now()
+
+                checklist_input = ChecklistInput(
+                    transaction_id=transaction_id,
+                    document_id=resource_id,
+                    action="document_verified",
+                )
+
+                checklist_result = await self.checklist_agent.execute(context, checklist_input)
+
+                if checklist_result.success:
+                    workflow.steps[1].status = "completed"
+                    workflow.steps[1].completed_at = datetime.now()
+                    workflow.steps[1].output = checklist_result.output.model_dump() if checklist_result.output else None
+                else:
+                    workflow.steps[1].status = "failed"
+                    workflow.steps[1].error = checklist_result.error
+
+                # Emit document verified event
+                await emit_event(
+                    AgentEvent(
+                        event_type="document.verified",
+                        agent_name="orchestrator",
+                        execution_id=context.execution_id,
+                        transaction_id=transaction_id,
+                        timestamp=datetime.now(),
+                        payload={
+                            "document_id": str(resource_id),
+                            "reviewer_id": str(reviewer_id) if reviewer_id else None,
+                        },
+                    )
+                )
+            else:
+                # Document rejected - emit event
+                await emit_event(
+                    AgentEvent(
+                        event_type="document.rejected",
+                        agent_name="orchestrator",
+                        execution_id=context.execution_id,
+                        transaction_id=transaction_id,
+                        timestamp=datetime.now(),
+                        payload={
+                            "document_id": str(resource_id),
+                            "reviewer_id": str(reviewer_id) if reviewer_id else None,
+                            "corrections": corrections,
+                        },
+                    )
+                )
+                workflow.steps[1].status = "skipped"
+
+        elif review_type == "deadline":
+            # Deadline review (e.g., confirming calculated dates)
+            await emit_event(
+                AgentEvent(
+                    event_type="deadline.reviewed",
+                    agent_name="orchestrator",
+                    execution_id=context.execution_id,
+                    transaction_id=transaction_id,
+                    timestamp=datetime.now(),
+                    payload={
+                        "deadline_id": str(resource_id),
+                        "approved": approved,
+                        "corrections": corrections,
+                    },
+                )
+            )
+            workflow.steps[1].status = "skipped"
+
+        elif review_type == "communication":
+            # Communication approved for sending
+            if approved:
+                await emit_event(
+                    AgentEvent(
+                        event_type="communication.approved",
+                        agent_name="orchestrator",
+                        execution_id=context.execution_id,
+                        transaction_id=transaction_id,
+                        timestamp=datetime.now(),
+                        payload={
+                            "communication_id": str(resource_id),
+                        },
+                    )
+                )
+            workflow.steps[1].status = "skipped"
+        else:
+            workflow.steps[1].status = "skipped"
+
+        workflow.steps[0].status = "completed"
+        workflow.steps[0].completed_at = datetime.now()
+        workflow.steps[0].output = {
+            "review_type": review_type,
+            "approved": approved,
+            "corrections": corrections,
+        }
+
+        workflow.status = "completed"
+        workflow.completed_at = datetime.now()
+
+        return workflow
+
+    async def handle_transaction_created(
+        self,
+        transaction_id: UUID,
+        organization_id: UUID,
+        user_id: UUID,
+        property_year_built: int | None = None,
+        is_hoa: bool = False,
+        is_financed: bool = True,
+    ) -> Workflow:
+        """
+        Handle transaction creation.
+
+        Initializes the checklist for the new transaction.
+        """
+        workflow_id = uuid4()
+
+        self.logger.info(
+            "transaction_created_workflow_started",
+            workflow_id=str(workflow_id),
+            transaction_id=str(transaction_id),
+        )
+
+        workflow = Workflow(
+            id=workflow_id,
+            workflow_type="transaction_created",
+            transaction_id=transaction_id,
+            steps=[
+                WorkflowStep(step_id="init_checklist", agent_name="checklist"),
+            ],
+            created_at=datetime.now(),
+        )
+
+        context = AgentContext(
+            execution_id=uuid4(),
+            transaction_id=transaction_id,
+            organization_id=organization_id,
+            user_id=user_id,
+            triggered_by="user",
+            triggered_at=datetime.now(),
+        )
+
+        # Initialize checklist
+        workflow.steps[0].status = "running"
+        workflow.steps[0].started_at = datetime.now()
+
+        checklist_input = ChecklistInput(
+            transaction_id=transaction_id,
+            action="initialize",
+            property_year_built=property_year_built,
+            is_hoa=is_hoa,
+            is_financed=is_financed,
+        )
+
+        result = await self.checklist_agent.execute(context, checklist_input)
+
+        if result.success:
+            workflow.steps[0].status = "completed"
+            workflow.steps[0].completed_at = datetime.now()
+            workflow.steps[0].output = result.output.model_dump() if result.output else None
+        else:
+            workflow.steps[0].status = "failed"
+            workflow.steps[0].error = result.error
+
+        workflow.status = "completed"
+        workflow.completed_at = datetime.now()
+
+        return workflow

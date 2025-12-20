@@ -1,0 +1,394 @@
+"""Email service for sending notifications."""
+
+import asyncio
+import smtplib
+import ssl
+from abc import ABC, abstractmethod
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from functools import lru_cache
+from typing import Any
+
+import structlog
+
+from packages.core.config import settings
+
+logger = structlog.get_logger()
+
+
+class EmailService(ABC):
+    """Abstract base class for email services."""
+
+    @abstractmethod
+    async def send_email(
+        self,
+        to_email: str,
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+        from_email: str | None = None,
+        reply_to: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        """
+        Send an email.
+
+        Args:
+            to_email: Recipient email address
+            subject: Email subject
+            body: Plain text body
+            html_body: Optional HTML body
+            from_email: Optional sender (defaults to settings.from_email)
+            reply_to: Optional reply-to address
+            attachments: Optional list of attachments
+
+        Returns:
+            bool: True if sent successfully
+        """
+        pass
+
+    @abstractmethod
+    async def send_bulk_email(
+        self,
+        recipients: list[str],
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+    ) -> dict[str, bool]:
+        """
+        Send email to multiple recipients.
+
+        Returns:
+            dict: Mapping of email -> success status
+        """
+        pass
+
+
+class SMTPEmailService(EmailService):
+    """SMTP-based email service."""
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        username: str | None = None,
+        password: str | None = None,
+        use_tls: bool = True,
+    ):
+        self.host = host
+        self.port = port
+        self.username = username
+        self.password = password
+        self.use_tls = use_tls
+        self.logger = logger.bind(service="email", backend="smtp")
+
+    async def send_email(
+        self,
+        to_email: str,
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+        from_email: str | None = None,
+        reply_to: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        """Send an email via SMTP."""
+        from_addr = from_email or settings.from_email
+
+        # Create message
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = from_addr
+        msg["To"] = to_email
+
+        if reply_to:
+            msg["Reply-To"] = reply_to
+
+        # Add plain text body
+        msg.attach(MIMEText(body, "plain"))
+
+        # Add HTML body if provided
+        if html_body:
+            msg.attach(MIMEText(html_body, "html"))
+
+        # Send in a thread to avoid blocking
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                self._send_smtp,
+                from_addr,
+                to_email,
+                msg.as_string(),
+            )
+            return result
+        except Exception as e:
+            self.logger.error(
+                "smtp_send_failed",
+                to_email=to_email,
+                error=str(e),
+            )
+            return False
+
+    def _send_smtp(
+        self,
+        from_addr: str,
+        to_addr: str,
+        message: str,
+    ) -> bool:
+        """Synchronous SMTP send (run in thread)."""
+        try:
+            if self.use_tls:
+                context = ssl.create_default_context()
+                with smtplib.SMTP(self.host, self.port) as server:
+                    server.starttls(context=context)
+                    if self.username and self.password:
+                        server.login(self.username, self.password)
+                    server.sendmail(from_addr, to_addr, message)
+            else:
+                with smtplib.SMTP(self.host, self.port) as server:
+                    if self.username and self.password:
+                        server.login(self.username, self.password)
+                    server.sendmail(from_addr, to_addr, message)
+
+            self.logger.info(
+                "email_sent",
+                to_email=to_addr,
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(
+                "smtp_error",
+                to_email=to_addr,
+                error=str(e),
+            )
+            raise
+
+    async def send_bulk_email(
+        self,
+        recipients: list[str],
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+    ) -> dict[str, bool]:
+        """Send email to multiple recipients."""
+        results = {}
+        for recipient in recipients:
+            results[recipient] = await self.send_email(
+                to_email=recipient,
+                subject=subject,
+                body=body,
+                html_body=html_body,
+            )
+        return results
+
+
+class ConsoleEmailService(EmailService):
+    """
+    Console-based email service for development.
+
+    Logs emails to console instead of sending them.
+    """
+
+    def __init__(self):
+        self.logger = logger.bind(service="email", backend="console")
+        self.sent_emails: list[dict[str, Any]] = []
+
+    async def send_email(
+        self,
+        to_email: str,
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+        from_email: str | None = None,
+        reply_to: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        """Log email to console instead of sending."""
+        from_addr = from_email or settings.from_email
+
+        email_record = {
+            "to": to_email,
+            "from": from_addr,
+            "subject": subject,
+            "body": body,
+            "html_body": html_body is not None,
+            "reply_to": reply_to,
+            "attachments": len(attachments) if attachments else 0,
+        }
+
+        self.sent_emails.append(email_record)
+
+        self.logger.info(
+            "email_logged",
+            to_email=to_email,
+            subject=subject,
+        )
+
+        print("\n" + "=" * 60)
+        print("📧 EMAIL (Console Mode)")
+        print("=" * 60)
+        print(f"To: {to_email}")
+        print(f"From: {from_addr}")
+        print(f"Subject: {subject}")
+        print("-" * 60)
+        print(body)
+        print("=" * 60 + "\n")
+
+        return True
+
+    async def send_bulk_email(
+        self,
+        recipients: list[str],
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+    ) -> dict[str, bool]:
+        """Log bulk emails to console."""
+        results = {}
+        for recipient in recipients:
+            results[recipient] = await self.send_email(
+                to_email=recipient,
+                subject=subject,
+                body=body,
+                html_body=html_body,
+            )
+        return results
+
+    def get_sent_emails(self) -> list[dict[str, Any]]:
+        """Get list of sent emails (for testing)."""
+        return self.sent_emails
+
+    def clear_sent_emails(self) -> None:
+        """Clear sent emails list (for testing)."""
+        self.sent_emails = []
+
+
+class QueuedEmailService(EmailService):
+    """
+    Email service that queues emails for background processing.
+
+    Uses the job queue to defer email sending.
+    """
+
+    def __init__(self, fallback_service: EmailService | None = None):
+        self.logger = logger.bind(service="email", backend="queued")
+        self.fallback = fallback_service or ConsoleEmailService()
+        self.queue: list[dict[str, Any]] = []
+
+    async def send_email(
+        self,
+        to_email: str,
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+        from_email: str | None = None,
+        reply_to: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        """Queue email for background processing."""
+        email_data = {
+            "to_email": to_email,
+            "subject": subject,
+            "body": body,
+            "html_body": html_body,
+            "from_email": from_email or settings.from_email,
+            "reply_to": reply_to,
+        }
+
+        self.queue.append(email_data)
+
+        self.logger.info(
+            "email_queued",
+            to_email=to_email,
+            subject=subject,
+            queue_size=len(self.queue),
+        )
+
+        # In development, also log to console
+        if settings.environment == "development":
+            await self.fallback.send_email(
+                to_email=to_email,
+                subject=subject,
+                body=body,
+                html_body=html_body,
+                from_email=from_email,
+                reply_to=reply_to,
+            )
+
+        return True
+
+    async def send_bulk_email(
+        self,
+        recipients: list[str],
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+    ) -> dict[str, bool]:
+        """Queue bulk emails."""
+        results = {}
+        for recipient in recipients:
+            results[recipient] = await self.send_email(
+                to_email=recipient,
+                subject=subject,
+                body=body,
+                html_body=html_body,
+            )
+        return results
+
+    async def process_queue(self, smtp_service: SMTPEmailService) -> dict[str, bool]:
+        """Process queued emails (called by worker)."""
+        results = {}
+
+        while self.queue:
+            email = self.queue.pop(0)
+            try:
+                success = await smtp_service.send_email(**email)
+                results[email["to_email"]] = success
+            except Exception as e:
+                self.logger.error(
+                    "queue_process_failed",
+                    to_email=email["to_email"],
+                    error=str(e),
+                )
+                results[email["to_email"]] = False
+                # Re-queue failed emails
+                self.queue.append(email)
+
+        return results
+
+
+# Service factory
+_email_service: EmailService | None = None
+
+
+def get_email_service() -> EmailService:
+    """Get the configured email service instance."""
+    global _email_service
+
+    if _email_service is not None:
+        return _email_service
+
+    if settings.environment == "development" or not settings.smtp_host:
+        # Use console service in development
+        _email_service = ConsoleEmailService()
+    elif settings.smtp_user and settings.smtp_password:
+        # Use SMTP service if credentials configured
+        _email_service = SMTPEmailService(
+            host=settings.smtp_host,
+            port=settings.smtp_port,
+            username=settings.smtp_user,
+            password=settings.smtp_password,
+        )
+    else:
+        # Use queued service with console fallback
+        _email_service = QueuedEmailService()
+
+    return _email_service
+
+
+def reset_email_service() -> None:
+    """Reset the email service (for testing)."""
+    global _email_service
+    _email_service = None

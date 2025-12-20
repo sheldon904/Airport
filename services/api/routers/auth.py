@@ -53,6 +53,25 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    """Forgot password request."""
+
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    """Reset password request."""
+
+    token: str
+    new_password: str
+
+
+class ValidateResetTokenRequest(BaseModel):
+    """Validate reset token request."""
+
+    token: str
+
+
 class TokenResponse(BaseModel):
     """Token response."""
 
@@ -270,3 +289,82 @@ async def create_user(
         role=user.role,
         organization_id=str(user.organization_id),
     )
+
+
+@router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
+async def forgot_password(
+    request: ForgotPasswordRequest,
+    service: AuthServiceDep,
+) -> dict:
+    """
+    Request a password reset email.
+
+    Always returns success to prevent email enumeration.
+    If email exists, a reset link will be sent.
+    """
+    result = await service.request_password_reset(request.email)
+
+    if result:
+        user, token = result
+        # Send password reset email
+        from packages.core.services.email import get_email_service
+
+        email_service = get_email_service()
+        reset_url = f"https://app.airporttc.com/reset-password?token={token}"
+
+        await email_service.send_email(
+            to_email=user.email,
+            subject="Password Reset Request - Airport TC",
+            body=f"""You have requested to reset your password.
+
+Click the link below to reset your password:
+{reset_url}
+
+This link will expire in 1 hour.
+
+If you did not request this password reset, please ignore this email.""",
+        )
+
+    return {"message": "If that email exists, a reset link has been sent"}
+
+
+@router.post("/reset-password", status_code=status.HTTP_200_OK)
+async def reset_password(
+    request: ResetPasswordRequest,
+    service: AuthServiceDep,
+) -> dict:
+    """
+    Reset password using a valid reset token.
+
+    Returns success if password was reset, error otherwise.
+    """
+    success = await service.reset_password(request.token, request.new_password)
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    return {"message": "Password has been reset successfully"}
+
+
+@router.post("/validate-reset-token", status_code=status.HTTP_200_OK)
+async def validate_reset_token(
+    request: ValidateResetTokenRequest,
+    service: AuthServiceDep,
+) -> dict:
+    """
+    Validate a password reset token.
+
+    Returns user email if token is valid, error otherwise.
+    """
+    user = await service.validate_reset_token(request.token)
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    return {"valid": True, "email": user.email}

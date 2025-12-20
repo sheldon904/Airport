@@ -165,11 +165,21 @@ class AgentEvent(BaseModel):
 
 async def emit_event(event: AgentEvent) -> None:
     """
-    Emit an event to the event bus (Redis Streams).
+    Emit an event to the event bus.
 
     Other agents and services can subscribe to these events.
     """
-    # TODO: Implement Redis Streams publishing
+    from packages.core.services.events import get_event_bus
+
+    event_bus = get_event_bus()
+
+    await event_bus.publish(
+        event_type=event.event_type,
+        payload=event.payload,
+        transaction_id=event.transaction_id,
+        agent_name=event.agent_name,
+    )
+
     logger.info(
         "event_emitted",
         event_type=event.event_type,
