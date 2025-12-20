@@ -13,11 +13,14 @@ from packages.db.session import AsyncSessionLocal
 from packages.db.repositories.job_queue import JobQueueRepository
 from packages.db.repositories.document import DocumentRepository
 from packages.db.repositories.deadline import DeadlineRepository
+from packages.db.repositories.transaction import TransactionRepository
+from packages.db.repositories.user import UserRepository
 from services.agents.document_extract.agent import (
     DocumentExtractAgent,
     DocumentExtractInput,
 )
 from services.agents.deadline.agent import DeadlineAgent, DeadlineInput
+from services.agents.notification.agent import NotificationAgent
 from services.agents.base import AgentContext
 
 logger = structlog.get_logger()
@@ -38,6 +41,7 @@ class Worker:
         # Initialize agents
         self.document_extract_agent = DocumentExtractAgent()
         self.deadline_agent = DeadlineAgent()
+        self.notification_agent = NotificationAgent()
 
     async def start(self) -> None:
         """Start the worker loop."""
@@ -283,14 +287,75 @@ class Worker:
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         """Handle deadline reminder job."""
-        # TODO: Implement email/notification sending
+        deadline_id = payload.get("deadline_id")
+        days_remaining = payload.get("days_remaining")
+        organization_id = payload.get("organization_id")
+        transaction_id = payload.get("transaction_id")
+
         logger.info(
             "deadline_reminder",
-            deadline_id=payload.get("deadline_id"),
-            days_remaining=payload.get("days_remaining"),
+            deadline_id=deadline_id,
+            days_remaining=days_remaining,
         )
 
-        return {"success": True, "notification_sent": False}
+        try:
+            # Get deadline details
+            deadline_repo = DeadlineRepository(session)
+            transaction_repo = TransactionRepository(session)
+            user_repo = UserRepository(session)
+
+            deadline = await deadline_repo.get_by_id(UUID(deadline_id))
+            if not deadline:
+                return {"success": False, "error": "Deadline not found"}
+
+            transaction = await transaction_repo.get_by_id(UUID(transaction_id))
+            if not transaction:
+                return {"success": False, "error": "Transaction not found"}
+
+            # Get users in the organization to notify
+            users = await user_repo.get_by_organization(UUID(organization_id))
+
+            # Build property address string
+            property_addr = transaction.property_address
+            address_str = property_addr.get("street", "Unknown property")
+            if property_addr.get("city"):
+                address_str += f", {property_addr['city']}"
+
+            # Send notifications to relevant users
+            notifications_sent = 0
+            for user in users:
+                if user.role in ["admin", "broker", "agent"]:
+                    await self.notification_agent.send_deadline_reminder(
+                        user_id=user.id,
+                        user_email=user.email,
+                        user_name=user.full_name,
+                        deadline_name=deadline.name,
+                        deadline_date=str(deadline.due_date),
+                        days_remaining=days_remaining,
+                        property_address=address_str,
+                        transaction_id=str(transaction.id),
+                    )
+                    notifications_sent += 1
+
+            # Update last_reminder_sent on deadline
+            await deadline_repo.update(
+                deadline.id,
+                last_reminder_sent=datetime.utcnow(),
+            )
+
+            return {
+                "success": True,
+                "notification_sent": True,
+                "notifications_count": notifications_sent,
+            }
+
+        except Exception as e:
+            logger.error(
+                "deadline_reminder_error",
+                deadline_id=deadline_id,
+                error=str(e),
+            )
+            return {"success": False, "error": str(e)}
 
 
 async def main() -> None:

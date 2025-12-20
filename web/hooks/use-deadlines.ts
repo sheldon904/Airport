@@ -20,11 +20,8 @@ export function useDeadlines(transactionId?: string, params?: { status?: string;
 export function useDeadline(id: string) {
   return useQuery<Deadline>({
     queryKey: ['deadlines', 'detail', id],
-    queryFn: async () => {
-      // API doesn't have single deadline endpoint
-      throw new Error('Single deadline fetch not implemented');
-    },
-    enabled: false,
+    queryFn: () => api.getDeadline(id),
+    enabled: !!id,
   });
 }
 

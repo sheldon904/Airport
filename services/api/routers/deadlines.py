@@ -185,6 +185,28 @@ async def list_overdue_deadlines(
     return [deadline_to_response(d) for d in deadlines]
 
 
+@router.get("/{deadline_id}", response_model=DeadlineResponse)
+async def get_deadline(
+    deadline_id: UUID,
+    current_user: CurrentUserDep,
+    service: DeadlineServiceDep,
+) -> DeadlineResponse:
+    """
+    Get a specific deadline by ID.
+
+    Returns deadline details with status and days remaining.
+    """
+    deadline = await service.get_deadline(deadline_id, current_user.organization_id)
+
+    if not deadline:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Deadline not found",
+        )
+
+    return deadline_to_response(deadline)
+
+
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=DeadlineResponse)
 async def create_deadline(
     request: CreateDeadlineRequest,

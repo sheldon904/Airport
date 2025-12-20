@@ -98,6 +98,23 @@ class DeadlineService:
         else:
             return DeadlineStatus.UPCOMING
 
+    async def get_deadline(
+        self,
+        deadline_id: UUID,
+        organization_id: UUID,
+    ) -> DeadlineModel | None:
+        """Get a single deadline with access control."""
+        deadline = await self.deadline_repo.get_by_id(deadline_id)
+        if not deadline:
+            return None
+
+        # Verify access through transaction
+        transaction = await self.transaction_repo.get_by_id(deadline.transaction_id)
+        if not transaction or transaction.organization_id != organization_id:
+            return None
+
+        return deadline
+
     async def get_transaction_deadlines(
         self,
         transaction_id: UUID,
