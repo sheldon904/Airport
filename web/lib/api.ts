@@ -272,6 +272,11 @@ class ApiClient {
     return response.data;
   }
 
+  async getDeadline(id: string): Promise<Deadline> {
+    const response = await this.client.get(`/api/v1/deadlines/${id}`);
+    return response.data;
+  }
+
   async getUpcomingDeadlines(daysAhead = 7): Promise<UpcomingDeadline[]> {
     const response = await this.client.get('/api/v1/deadlines/upcoming', {
       params: { days_ahead: daysAhead },

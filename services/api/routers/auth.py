@@ -3,9 +3,20 @@
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, EmailStr
 
+from packages.core.config import settings
 from services.api.dependencies import AuthServiceDep, CurrentUserDep
 
 router = APIRouter()
+
+
+def validate_password_strength(password: str) -> None:
+    """Validate password meets security requirements."""
+    is_valid, error_message = settings.validate_password(password)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_message,
+        )
 
 
 # === Request/Response Models ===
@@ -121,6 +132,9 @@ async def register_organization(
 
     Creates the organization and first admin user, returns tokens.
     """
+    # Validate password strength
+    validate_password_strength(request.admin_password)
+
     try:
         org, user = await service.register_organization(
             org_name=request.organization_name,
@@ -236,6 +250,9 @@ async def change_password(
     service: AuthServiceDep,
 ) -> None:
     """Change the current user's password."""
+    # Validate new password strength
+    validate_password_strength(request.new_password)
+
     success = await service.change_password(
         current_user.id,
         request.current_password,
@@ -265,6 +282,9 @@ async def create_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
         )
+
+    # Validate password strength
+    validate_password_strength(request.password)
 
     try:
         user = await service.register_user(
@@ -310,7 +330,7 @@ async def forgot_password(
         from packages.core.services.email import get_email_service
 
         email_service = get_email_service()
-        reset_url = f"https://app.airporttc.com/reset-password?token={token}"
+        reset_url = f"{settings.password_reset_full_url}?token={token}"
 
         await email_service.send_email(
             to_email=user.email,
@@ -338,6 +358,9 @@ async def reset_password(
 
     Returns success if password was reset, error otherwise.
     """
+    # Validate new password strength
+    validate_password_strength(request.new_password)
+
     success = await service.reset_password(request.token, request.new_password)
 
     if not success:

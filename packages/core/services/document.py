@@ -235,12 +235,15 @@ class DocumentService:
         document_id: UUID,
         organization_id: UUID,
     ) -> bool:
-        """Delete a document."""
+        """
+        Delete a document from database.
+
+        Note: Storage cleanup is handled by the API router which has
+        access to the storage service.
+        """
         document = await self.get_document(document_id, organization_id)
         if not document:
             return False
-
-        # TODO: Also delete from storage
 
         return await self.document_repo.delete(document_id)
 
@@ -248,7 +251,6 @@ class DocumentService:
         self,
         organization_id: UUID,
     ) -> list[DocumentModel]:
-        """Get documents needing human review."""
-        # TODO: Implement with proper org filtering
+        """Get documents needing human review for an organization."""
         docs = await self.document_repo.get_needs_review(organization_id)
         return list(docs)
