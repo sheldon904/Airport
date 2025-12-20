@@ -117,6 +117,16 @@ class DeadlineService:
         )
         return list(deadlines)
 
+    # Florida statutory deadlines
+    STATUTORY_DEADLINE_TYPES = {
+        "inspection_period",
+        "financing_contingency",
+        "title_review",
+        "hoa_disclosure_review",
+        "lead_paint_disclosure",
+        "right_to_cancel",
+    }
+
     async def get_upcoming_deadlines(
         self,
         organization_id: UUID,
@@ -137,15 +147,18 @@ class DeadlineService:
             transaction = await self.transaction_repo.get_by_id(deadline.transaction_id)
             if transaction and transaction.organization_id == organization_id:
                 days_remaining = (deadline.due_date - date.today()).days
+                is_statutory = deadline.deadline_type in self.STATUTORY_DEADLINE_TYPES
                 result.append({
                     "id": str(deadline.id),
                     "name": deadline.name,
+                    "title": deadline.name,  # Alias for frontend compatibility
                     "due_date": str(deadline.due_date),
                     "days_remaining": days_remaining,
                     "status": deadline.status,
                     "deadline_type": deadline.deadline_type,
                     "transaction_id": str(transaction.id),
                     "property_address": transaction.property_address.get("street", ""),
+                    "is_statutory": is_statutory,
                 })
 
         return sorted(result, key=lambda x: x["due_date"])

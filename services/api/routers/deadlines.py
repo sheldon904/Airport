@@ -21,6 +21,7 @@ class DeadlineResponse(BaseModel):
     transaction_id: UUID
     deadline_type: str
     name: str
+    title: str  # Alias for name for frontend compatibility
     description: str | None
     due_date: date
     status: str
@@ -28,6 +29,8 @@ class DeadlineResponse(BaseModel):
     notes: str | None
     completed_at: str | None
     source_document_id: UUID | None
+    is_statutory: bool  # Whether deadline is mandated by FL statute
+    statutory_reference: str | None  # FL statute reference if applicable
 
 
 class CreateDeadlineRequest(BaseModel):
@@ -72,26 +75,50 @@ class UpcomingDeadlineResponse(BaseModel):
 
     id: str
     name: str
+    title: str  # Alias for name for frontend compatibility
     due_date: str
     days_remaining: int
     status: str
     deadline_type: str
     transaction_id: str
     property_address: str
+    is_statutory: bool  # Whether deadline is mandated by FL statute
 
 
 # === Helper Functions ===
 
 
+# Florida statutory deadlines and their references
+FL_STATUTORY_DEADLINES = {
+    "inspection_period": ("F.S. 475.278", True),
+    "financing_contingency": ("F.S. 475.25", True),
+    "title_review": ("F.S. 689.01", True),
+    "hoa_disclosure_review": ("F.S. 720.401", True),
+    "lead_paint_disclosure": ("42 U.S.C. 4852d", True),  # Federal
+    "right_to_cancel": ("F.S. 501.025", True),
+    "closing": (None, False),
+    "earnest_money": (None, False),
+    "appraisal": (None, False),
+    "custom": (None, False),
+}
+
+
+def get_statutory_info(deadline_type: str) -> tuple[str | None, bool]:
+    """Get statutory reference and is_statutory flag for a deadline type."""
+    return FL_STATUTORY_DEADLINES.get(deadline_type, (None, False))
+
+
 def deadline_to_response(deadline) -> DeadlineResponse:
     """Convert deadline model to response."""
     days_remaining = (deadline.due_date - date.today()).days
+    statutory_ref, is_statutory = get_statutory_info(deadline.deadline_type)
 
     return DeadlineResponse(
         id=deadline.id,
         transaction_id=deadline.transaction_id,
         deadline_type=deadline.deadline_type,
         name=deadline.name,
+        title=deadline.name,  # Alias for frontend compatibility
         description=deadline.description,
         due_date=deadline.due_date,
         status=deadline.status,
@@ -99,6 +126,8 @@ def deadline_to_response(deadline) -> DeadlineResponse:
         notes=deadline.notes,
         completed_at=deadline.completed_at.isoformat() if deadline.completed_at else None,
         source_document_id=deadline.source_document_id,
+        is_statutory=is_statutory,
+        statutory_reference=statutory_ref,
     )
 
 

@@ -28,11 +28,15 @@ class DocumentResponse(BaseModel):
     content_type: str
     file_size: int | None
     status: str
+    extraction_status: str  # Maps from status for frontend compatibility
     extraction_confidence: float | None
+    confidence_score: float | None  # Alias for extraction_confidence
     needs_review: bool
     needs_review_reason: str | None
     uploaded_at: str
+    created_at: str  # Alias for uploaded_at for frontend compatibility
     verified_at: str | None
+    flags: list[str]  # Derived from extracted_data unclear_items
 
 
 class ExtractedDataResponse(BaseModel):
@@ -71,6 +75,10 @@ class UploadUrlResponse(BaseModel):
 
 def document_to_response(document) -> DocumentResponse:
     """Convert document model to response."""
+    uploaded_at_iso = document.uploaded_at.isoformat()
+    extracted_data = document.extracted_data or {}
+    unclear_items = extracted_data.get("unclear_items", [])
+
     return DocumentResponse(
         id=document.id,
         transaction_id=document.transaction_id,
@@ -79,11 +87,15 @@ def document_to_response(document) -> DocumentResponse:
         content_type=document.content_type,
         file_size=document.file_size,
         status=document.status,
+        extraction_status=document.status,  # Frontend uses extraction_status
         extraction_confidence=document.extraction_confidence,
+        confidence_score=document.extraction_confidence,  # Alias for frontend
         needs_review=document.status == "needs_review",
         needs_review_reason=document.needs_review_reason,
-        uploaded_at=document.uploaded_at.isoformat(),
+        uploaded_at=uploaded_at_iso,
+        created_at=uploaded_at_iso,  # Alias for frontend compatibility
         verified_at=document.verified_at.isoformat() if document.verified_at else None,
+        flags=unclear_items,  # Derived from extracted_data
     )
 
 
