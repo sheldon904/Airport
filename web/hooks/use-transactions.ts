@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { Transaction, DashboardData, CreateTransactionForm } from '@/types';
+import { Transaction, DashboardData, CreateTransactionForm, Party } from '@/types';
 
 export function useTransactions(params?: { status?: string; limit?: number; offset?: number }) {
   return useQuery<Transaction[]>({
@@ -61,6 +61,40 @@ export function useDeleteTransaction() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+export function useAddParty() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      transactionId,
+      party,
+    }: {
+      transactionId: string;
+      party: Omit<Party, 'id'>;
+    }) => api.addParty(transactionId, party),
+    onSuccess: (_, { transactionId }) => {
+      queryClient.invalidateQueries({ queryKey: ['transactions', transactionId] });
+    },
+  });
+}
+
+export function useRemoveParty() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      transactionId,
+      partyId,
+    }: {
+      transactionId: string;
+      partyId: string;
+    }) => api.removeParty(transactionId, partyId),
+    onSuccess: (_, { transactionId }) => {
+      queryClient.invalidateQueries({ queryKey: ['transactions', transactionId] });
     },
   });
 }
