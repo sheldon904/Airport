@@ -149,6 +149,26 @@ class JobQueueRepository(BaseRepository[JobQueueModel]):
             filters["job_type"] = job_type
         return await self.count(**filters)
 
+    async def get_pending_by_payload_key(
+        self,
+        job_type: str,
+        key: str,
+        value: str,
+    ) -> JobQueueModel | None:
+        """Get a pending job with a specific payload value."""
+        from sqlalchemy.dialects.postgresql import JSONB
+
+        result = await self.session.execute(
+            select(self.model).where(
+                and_(
+                    self.model.job_type == job_type,
+                    self.model.status == "pending",
+                    self.model.payload[key].astext == value,
+                )
+            ).limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_failed_jobs(
         self,
         job_type: str | None = None,

@@ -98,6 +98,10 @@ class DeadlineRepository(BaseRepository[DeadlineModel]):
         """Get all overdue deadlines for an organization."""
         return await self.get_overdue(organization_id=organization_id)
 
+    async def get_all_overdue(self) -> Sequence[DeadlineModel]:
+        """Get all overdue deadlines across all organizations."""
+        return await self.get_overdue(organization_id=None)
+
     async def count_upcoming_by_organization(
         self,
         organization_id: UUID,

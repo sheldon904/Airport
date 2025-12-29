@@ -4,6 +4,8 @@ from packages.core.services.transaction import TransactionService
 from packages.core.services.document import DocumentService
 from packages.core.services.deadline import DeadlineService
 from packages.core.services.auth import AuthService
+from packages.core.services.audit import AuditService
+from packages.core.services.report import ReportService
 from packages.core.services.email import (
     EmailService,
     SMTPEmailService,
@@ -22,6 +24,8 @@ __all__ = [
     "DocumentService",
     "DeadlineService",
     "AuthService",
+    "AuditService",
+    "ReportService",
     "EmailService",
     "SMTPEmailService",
     "ConsoleEmailService",
