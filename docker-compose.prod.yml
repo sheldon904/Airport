@@ -1,0 +1,197 @@
+# Docker Compose for Production Deployment
+#
+# Prerequisites:
+# - Set required environment variables (see .env.example)
+# - Configure external PostgreSQL and Redis instances (recommended)
+# - Set up proper SSL/TLS termination via load balancer
+#
+# Usage:
+#   docker-compose -f docker-compose.prod.yml up -d
+#
+# For scaling:
+#   docker-compose -f docker-compose.prod.yml up -d --scale api=3 --scale worker=2
+
+services:
+  # === API Service ===
+  # Main application API server
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      target: api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      # Database - Use external managed PostgreSQL in production
+      - DATABASE_URL=${DATABASE_URL}
+      # Redis - Use external managed Redis in production
+      - REDIS_URL=${REDIS_URL}
+      # Storage - Use S3 or compatible service
+      - STORAGE_ENDPOINT=${STORAGE_ENDPOINT}
+      - STORAGE_BUCKET=${STORAGE_BUCKET}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      # Anthropic API
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
+      - ANTHROPIC_MAX_TOKENS=${ANTHROPIC_MAX_TOKENS:-4096}
+      - ANTHROPIC_TIMEOUT_SECONDS=${ANTHROPIC_TIMEOUT_SECONDS:-120}
+      # Security
+      - SECRET_KEY=${SECRET_KEY}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      - REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      # Application
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=json
+      # CORS - Configure for your domains
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      # Rate limiting
+      - RATE_LIMIT_REQUESTS=${RATE_LIMIT_REQUESTS:-100}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-60}
+      # Email
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - FROM_EMAIL=${FROM_EMAIL}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # === Background Worker ===
+  # Processes async jobs from the queue
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      target: worker
+    restart: always
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - STORAGE_ENDPOINT=${STORAGE_ENDPOINT}
+      - STORAGE_BUCKET=${STORAGE_BUCKET}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=json
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # === Scheduler Service ===
+  # Handles periodic tasks like deadline reminders
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      target: scheduler
+    restart: always
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=json
+    deploy:
+      # Only need one scheduler instance
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # === Database Migration ===
+  # Run migrations before starting other services
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      target: migrate
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+    profiles:
+      - migrate
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+
+  # === Frontend (Next.js) ===
+  # Build and serve the Next.js frontend
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# For production, use external managed services:
+# - PostgreSQL: AWS RDS, Google Cloud SQL, etc.
+# - Redis: AWS ElastiCache, Redis Cloud, etc.
+# - Storage: AWS S3, Google Cloud Storage, etc.
+
+networks:
+  default:
+    driver: bridge
