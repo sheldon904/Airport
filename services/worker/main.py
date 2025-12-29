@@ -9,6 +9,7 @@ from uuid import UUID
 import structlog
 
 from packages.core.config import settings
+from packages.core.services.audit import AuditAction, AuditService
 from packages.db.session import AsyncSessionLocal
 from packages.db.repositories.job_queue import JobQueueRepository
 from packages.db.repositories.document import DocumentRepository
@@ -26,17 +27,68 @@ from services.agents.base import AgentContext
 logger = structlog.get_logger()
 
 
+class ExponentialBackoff:
+    """
+    Exponential backoff with jitter for polling.
+
+    Starts at min_delay, doubles on each empty poll (up to max_delay),
+    and resets to min_delay when a job is processed.
+    """
+
+    def __init__(
+        self,
+        min_delay: float = 0.5,
+        max_delay: float = 30.0,
+        multiplier: float = 2.0,
+        jitter: float = 0.1,
+    ) -> None:
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+        self.multiplier = multiplier
+        self.jitter = jitter
+        self._current_delay = min_delay
+
+    def reset(self) -> None:
+        """Reset delay to minimum after processing a job."""
+        self._current_delay = self.min_delay
+
+    def increase(self) -> None:
+        """Increase delay after an empty poll."""
+        self._current_delay = min(
+            self._current_delay * self.multiplier,
+            self.max_delay,
+        )
+
+    async def wait(self) -> None:
+        """Wait for the current delay with jitter."""
+        import random
+
+        jitter_amount = self._current_delay * self.jitter * random.random()
+        await asyncio.sleep(self._current_delay + jitter_amount)
+
+    @property
+    def current_delay(self) -> float:
+        """Current delay in seconds."""
+        return self._current_delay
+
+
 class Worker:
     """
     Background worker for processing agent jobs.
 
-    Polls the job queue and executes agents based on job type.
-    Supports graceful shutdown and job retry logic.
+    Features:
+    - Polls the job queue with exponential backoff
+    - Graceful shutdown on SIGTERM/SIGINT
+    - Automatic retry with exponential backoff on failures
+    - Audit logging for job execution
     """
 
     def __init__(self) -> None:
         self.running = False
         self.current_job_id: UUID | None = None
+        self.backoff = ExponentialBackoff()
+        self.jobs_processed = 0
+        self.jobs_failed = 0
 
         # Initialize agents
         self.document_extract_agent = DocumentExtractAgent()
@@ -46,7 +98,7 @@ class Worker:
     async def start(self) -> None:
         """Start the worker loop."""
         self.running = True
-        logger.info("worker_started")
+        logger.info("worker_started", pid=asyncio.current_task().get_name())
 
         # Set up signal handlers for graceful shutdown
         loop = asyncio.get_event_loop()
@@ -55,20 +107,37 @@ class Worker:
 
         while self.running:
             try:
-                await self._process_next_job()
-            except Exception as e:
-                logger.error("worker_error", error=str(e))
-                await asyncio.sleep(5)  # Back off on errors
+                job_found = await self._process_next_job()
 
-        logger.info("worker_stopped")
+                if job_found:
+                    self.backoff.reset()
+                else:
+                    self.backoff.increase()
+                    await self.backoff.wait()
+
+            except Exception as e:
+                logger.error("worker_error", error=str(e), exc_info=True)
+                self.backoff.increase()
+                await self.backoff.wait()
+
+        logger.info(
+            "worker_stopped",
+            jobs_processed=self.jobs_processed,
+            jobs_failed=self.jobs_failed,
+        )
 
     def _handle_shutdown(self) -> None:
         """Handle shutdown signal."""
-        logger.info("shutdown_requested")
+        logger.info("shutdown_requested", current_job=str(self.current_job_id))
         self.running = False
 
-    async def _process_next_job(self) -> None:
-        """Process the next available job from the queue."""
+    async def _process_next_job(self) -> bool:
+        """
+        Process the next available job from the queue.
+
+        Returns:
+            True if a job was processed, False if queue was empty.
+        """
         async with AsyncSessionLocal() as session:
             job_repo = JobQueueRepository(session)
 
@@ -78,13 +147,12 @@ class Worker:
                     "document_extraction",
                     "deadline_calculation",
                     "deadline_reminder",
+                    "report_generation",
                 ]
             )
 
             if not job:
-                # No jobs available, wait before polling again
-                await asyncio.sleep(1)
-                return
+                return False
 
             self.current_job_id = job.id
 
@@ -92,6 +160,7 @@ class Worker:
                 "job_started",
                 job_id=str(job.id),
                 job_type=job.job_type,
+                attempt=getattr(job, 'attempt', 1),
             )
 
             try:
@@ -100,11 +169,16 @@ class Worker:
                 await job_repo.complete(job.id, result)
                 await session.commit()
 
+                self.jobs_processed += 1
+
                 logger.info(
                     "job_completed",
                     job_id=str(job.id),
                     job_type=job.job_type,
+                    success=result.get("success", True),
                 )
+
+                return True
 
             except Exception as e:
                 logger.error(
@@ -112,14 +186,18 @@ class Worker:
                     job_id=str(job.id),
                     job_type=job.job_type,
                     error=str(e),
+                    exc_info=True,
                 )
 
+                self.jobs_failed += 1
                 await session.rollback()
 
                 async with AsyncSessionLocal() as error_session:
                     error_repo = JobQueueRepository(error_session)
                     await error_repo.fail(job.id, str(e))
                     await error_session.commit()
+
+                return True  # A job was attempted
 
             finally:
                 self.current_job_id = None

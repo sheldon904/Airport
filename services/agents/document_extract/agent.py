@@ -1,6 +1,5 @@
 """Document extraction agent implementation."""
 
-import base64
 import json
 import re
 from datetime import date, datetime
@@ -8,11 +7,13 @@ from io import BytesIO
 from typing import Any
 from uuid import UUID
 
-from anthropic import Anthropic
+import httpx
+from anthropic import AsyncAnthropic, APIError, APITimeoutError
 from pydantic import BaseModel
 from pypdf import PdfReader
 
 from packages.core.config import settings
+from packages.core.exceptions import AIServiceError
 from packages.core.services.storage import get_storage_service
 from services.agents.base import AgentContext, BaseAgent
 
@@ -186,11 +187,14 @@ class DocumentExtractAgent(BaseAgent[DocumentExtractInput, DocumentExtractOutput
     """
 
     name = "document_extract"
-    version = "0.1.0"
+    version = "0.2.0"
 
     def __init__(self) -> None:
         super().__init__()
-        self.client = Anthropic(api_key=settings.anthropic_api_key)
+        self.client = AsyncAnthropic(
+            api_key=settings.anthropic_api_key,
+            timeout=httpx.Timeout(settings.anthropic_timeout_seconds),
+        )
         self.storage = get_storage_service()
 
     async def process(
@@ -331,7 +335,7 @@ class DocumentExtractAgent(BaseAgent[DocumentExtractInput, DocumentExtractOutput
         document_type: str,
         filename: str,
     ) -> str:
-        """Call Claude API for extraction."""
+        """Call Claude API for extraction using async client."""
         # Truncate very long documents to stay within context limits
         max_content_length = 100000  # ~25k tokens
         if len(document_content) > max_content_length:
@@ -343,13 +347,19 @@ class DocumentExtractAgent(BaseAgent[DocumentExtractInput, DocumentExtractOutput
             document_content=document_content,
         )
 
-        message = self.client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        return message.content[0].text
+        try:
+            message = await self.client.messages.create(
+                model=settings.anthropic_model,
+                max_tokens=settings.anthropic_max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return message.content[0].text
+        except APITimeoutError as e:
+            self.logger.error("claude_timeout", error=str(e))
+            raise AIServiceError(message="AI extraction timed out. Please try again.")
+        except APIError as e:
+            self.logger.error("claude_api_error", error=str(e), status_code=e.status_code)
+            raise AIServiceError(message=f"AI service error: {e.message}")
 
     def _parse_extraction_result(
         self,

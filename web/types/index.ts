@@ -250,3 +250,115 @@ export const DOCUMENT_TYPE_LABELS: Record<string, string> = {
   pre_approval: 'Pre-Approval',
   other: 'Other',
 };
+
+// Report Types
+
+export type DeadlineReportStatus = 'on_track' | 'due_soon' | 'overdue' | 'completed' | 'waived';
+export type DocumentReportStatus = 'received' | 'pending' | 'needs_review' | 'verified' | 'missing';
+export type RiskLevel = 'low' | 'medium' | 'high';
+
+export interface PartyInfo {
+  role: string;
+  name: string;
+  email?: string;
+  phone?: string;
+}
+
+export interface DeadlineInfo {
+  id: string;
+  name: string;
+  due_date: string;
+  status: DeadlineReportStatus;
+  days_remaining: number;
+  is_statutory: boolean;
+  completed_at?: string;
+  notes?: string;
+}
+
+export interface DocumentInfo {
+  id: string;
+  document_type: string;
+  filename: string;
+  status: DocumentReportStatus;
+  uploaded_at: string;
+  verified_at?: string;
+  extraction_confidence?: number;
+  needs_review_reason?: string;
+}
+
+export interface ComplianceMetrics {
+  total_deadlines: number;
+  completed_deadlines: number;
+  overdue_deadlines: number;
+  upcoming_deadlines: number;
+  deadline_compliance_rate: number;
+  total_documents: number;
+  verified_documents: number;
+  pending_documents: number;
+  needs_review_documents: number;
+  document_completion_rate: number;
+  overall_compliance_score: number;
+  risk_level: RiskLevel;
+}
+
+export interface TransactionSummaryReport {
+  report_id: string;
+  report_type: string;
+  generated_at: string;
+  generated_by?: string;
+  transaction_id: string;
+  property_address: PropertyAddress;
+  transaction_type: string;
+  status: string;
+  purchase_price?: number;
+  effective_date?: string;
+  closing_date?: string;
+  days_to_closing?: number;
+  parties: PartyInfo[];
+  metrics: ComplianceMetrics;
+  deadlines: DeadlineInfo[];
+  documents: DocumentInfo[];
+  warnings: string[];
+  notes?: string;
+}
+
+export interface OrganizationOverviewReport {
+  report_id: string;
+  report_type: string;
+  generated_at: string;
+  organization_id: string;
+  organization_name: string;
+  total_transactions: number;
+  active_transactions: number;
+  pending_close_transactions: number;
+  closed_this_month: number;
+  overall_compliance_rate: number;
+  transactions_at_risk: number;
+  upcoming_closings: {
+    id: string;
+    address: string;
+    closing_date?: string;
+    days_remaining?: number;
+  }[];
+  overdue_deadlines: {
+    id: string;
+    name: string;
+    due_date: string;
+    transaction_id: string;
+  }[];
+  documents_needing_review: number;
+}
+
+export const RISK_LEVEL_COLORS: Record<RiskLevel, string> = {
+  low: 'text-green-600 bg-green-100',
+  medium: 'text-yellow-600 bg-yellow-100',
+  high: 'text-red-600 bg-red-100',
+};
+
+export const DEADLINE_REPORT_STATUS_COLORS: Record<DeadlineReportStatus, string> = {
+  on_track: 'text-green-600 bg-green-100',
+  due_soon: 'text-yellow-600 bg-yellow-100',
+  overdue: 'text-red-600 bg-red-100',
+  completed: 'text-blue-600 bg-blue-100',
+  waived: 'text-gray-600 bg-gray-100',
+};

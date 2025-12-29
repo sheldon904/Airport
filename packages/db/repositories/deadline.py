@@ -91,6 +91,39 @@ class DeadlineRepository(BaseRepository[DeadlineModel]):
         result = await self.session.execute(query)
         return result.scalars().all()
 
+    async def get_overdue_by_organization(
+        self,
+        organization_id: UUID,
+    ) -> Sequence[DeadlineModel]:
+        """Get all overdue deadlines for an organization."""
+        return await self.get_overdue(organization_id=organization_id)
+
+    async def count_upcoming_by_organization(
+        self,
+        organization_id: UUID,
+        days: int = 7,
+    ) -> int:
+        """Count upcoming deadlines for an organization within N days."""
+        from sqlalchemy import func
+
+        today = date.today()
+        future = today + timedelta(days=days)
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(self.model)
+            .join(TransactionModel, self.model.transaction_id == TransactionModel.id)
+            .where(
+                and_(
+                    TransactionModel.organization_id == organization_id,
+                    self.model.due_date >= today,
+                    self.model.due_date <= future,
+                    self.model.status.in_(["upcoming", "due_soon"]),
+                )
+            )
+        )
+        return result.scalar() or 0
+
     async def get_needing_reminder(
         self,
         target_date: date,
