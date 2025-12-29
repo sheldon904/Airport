@@ -45,10 +45,13 @@ class PartyInfo(BaseModel):
 class CreateTransactionRequest(BaseModel):
     """Request to create a new transaction."""
 
-    transaction_type: str = Field(..., pattern="^(purchase|sale|dual)$")
+    transaction_type: str = Field(..., pattern="^(purchase|sale|dual|lease)$")
     property_address: PropertyAddress
     purchase_price: Decimal | None = None
     year_built: int | None = Field(None, ge=1800, le=2100)
+    closing_date: date | None = None
+    buyer_name: str | None = None
+    seller_name: str | None = None
     notes: str | None = None
 
 
@@ -92,6 +95,8 @@ class TransactionResponse(BaseModel):
     effective_date: date | None
     closing_date: date | None
     parties: list[dict[str, Any]]
+    buyer_name: str | None = None
+    seller_name: str | None = None
     notes: str | None
     created_at: str
     updated_at: str
@@ -129,8 +134,19 @@ class DashboardResponse(BaseModel):
 # === Helper Functions ===
 
 
+def _extract_party_name(parties: list[dict[str, Any]], role: str) -> str | None:
+    """Extract party name by role from parties list."""
+    if not parties:
+        return None
+    for party in parties:
+        if party.get("role") == role:
+            return party.get("name")
+    return None
+
+
 def transaction_to_response(transaction) -> TransactionResponse:
     """Convert transaction model to response."""
+    parties = transaction.parties or []
     return TransactionResponse(
         id=transaction.id,
         status=transaction.status,
@@ -140,7 +156,9 @@ def transaction_to_response(transaction) -> TransactionResponse:
         year_built=transaction.year_built,
         effective_date=transaction.effective_date,
         closing_date=transaction.closing_date,
-        parties=transaction.parties or [],
+        parties=parties,
+        buyer_name=_extract_party_name(parties, "buyer"),
+        seller_name=_extract_party_name(parties, "seller"),
         notes=transaction.notes,
         created_at=transaction.created_at.isoformat(),
         updated_at=transaction.updated_at.isoformat(),
@@ -162,6 +180,13 @@ async def create_transaction(
     Creates a transaction shell with an initialized Florida compliance
     checklist. The transaction starts in 'draft' status.
     """
+    # Build initial parties list from buyer_name/seller_name if provided
+    initial_parties: list[dict[str, Any]] = []
+    if request.buyer_name:
+        initial_parties.append({"role": "buyer", "name": request.buyer_name})
+    if request.seller_name:
+        initial_parties.append({"role": "seller", "name": request.seller_name})
+
     transaction = await service.create_transaction(
         organization_id=current_user.organization_id,
         created_by=current_user.id,
@@ -169,6 +194,8 @@ async def create_transaction(
         property_address=request.property_address.model_dump(),
         purchase_price=request.purchase_price,
         year_built=request.year_built,
+        closing_date=request.closing_date,
+        parties=initial_parties if initial_parties else None,
         notes=request.notes,
     )
 

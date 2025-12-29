@@ -15,12 +15,12 @@ from sqlalchemy.pool import StaticPool
 # Set test environment variables before imports
 os.environ["TESTING"] = "1"
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
-os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-testing-only"
+os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only"
 os.environ["ANTHROPIC_API_KEY"] = "test-api-key"
-os.environ["S3_ENDPOINT_URL"] = "http://localhost:9000"
-os.environ["S3_ACCESS_KEY"] = "minioadmin"
-os.environ["S3_SECRET_KEY"] = "minioadmin"
-os.environ["S3_BUCKET_NAME"] = "test-documents"
+os.environ["STORAGE_ENDPOINT"] = "http://localhost:9000"
+os.environ["AWS_ACCESS_KEY_ID"] = "minioadmin"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "minioadmin"
+os.environ["STORAGE_BUCKET"] = "test-documents"
 
 from packages.db.models import Base
 from packages.db.session import get_db

@@ -10,6 +10,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 import structlog
 
+from packages.core.config import settings
 from packages.core.exceptions import RateLimitError
 
 logger = structlog.get_logger()
@@ -127,8 +128,11 @@ def get_rate_limiter() -> RateLimiter:
 
 def _configure_default_limits(limiter: RateLimiter) -> None:
     """Configure default rate limits for sensitive endpoints."""
-    # Strict limits for auth endpoints
-    auth_config = RateLimitConfig(requests=5, window=60)
+    # Strict limits for auth endpoints (from config)
+    auth_config = RateLimitConfig(
+        requests=settings.rate_limit_auth_requests,
+        window=settings.rate_limit_auth_window_seconds,
+    )
     limiter.configure("/api/v1/auth/login", auth_config)
     limiter.configure("/api/v1/auth/register", auth_config)
     limiter.configure("/api/v1/auth/forgot-password", RateLimitConfig(requests=3, window=300))
@@ -137,8 +141,11 @@ def _configure_default_limits(limiter: RateLimiter) -> None:
     # Moderate limits for document upload
     limiter.configure("/api/v1/documents", RateLimitConfig(requests=20, window=60))
 
-    # General API limit
-    limiter.configure_default(RateLimitConfig(requests=100, window=60))
+    # General API limit (from config)
+    limiter.configure_default(RateLimitConfig(
+        requests=settings.rate_limit_requests,
+        window=settings.rate_limit_window_seconds,
+    ))
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
