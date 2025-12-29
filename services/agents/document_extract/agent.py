@@ -1,5 +1,12 @@
-"""Document extraction agent implementation."""
+"""Document extraction agent implementation.
 
+This agent extracts structured data from real estate documents using:
+- Text extraction from PDFs via pypdf
+- Claude Vision API for image documents (JPG, PNG, TIFF)
+- Claude text API for text-based documents
+"""
+
+import base64
 import json
 import re
 from datetime import date, datetime
@@ -16,6 +23,18 @@ from packages.core.config import settings
 from packages.core.exceptions import AIServiceError
 from packages.core.services.storage import get_storage_service
 from services.agents.base import AgentContext, BaseAgent
+
+
+# MIME type mapping for Claude Vision API
+IMAGE_MIME_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".tiff": "image/tiff",
+    ".tif": "image/tiff",
+}
 
 
 # === Input/Output Models ===
@@ -180,6 +199,11 @@ class DocumentExtractAgent(BaseAgent[DocumentExtractInput, DocumentExtractOutput
     Uses Claude API to parse contracts, disclosures, and other documents,
     extracting parties, dates, contingencies, and other key information.
 
+    Supports:
+    - PDF documents (text extraction via pypdf)
+    - Image documents (Claude Vision API for JPG, PNG, TIFF, etc.)
+    - Text documents (direct processing)
+
     Compliance Notes:
     - Only extracts factual information from documents
     - Does NOT interpret contract terms or provide legal advice
@@ -187,7 +211,7 @@ class DocumentExtractAgent(BaseAgent[DocumentExtractInput, DocumentExtractOutput
     """
 
     name = "document_extract"
-    version = "0.2.0"
+    version = "0.3.0"
 
     def __init__(self) -> None:
         super().__init__()
@@ -218,27 +242,55 @@ class DocumentExtractAgent(BaseAgent[DocumentExtractInput, DocumentExtractOutput
             # 1. Fetch document from S3
             document_bytes = await self.storage.download_file(input_data.storage_path)
 
-            # 2. Extract text from document
-            document_text = await self._extract_text(document_bytes, input_data.filename)
+            # 2. Check if this is an image document
+            is_image = self._is_image_document(input_data.filename)
 
-            if not document_text.strip():
-                return (
-                    DocumentExtractOutput(
-                        document_id=input_data.document_id,
-                        document_type_detected=input_data.document_type,
-                        unclear_items=["Could not extract text from document"],
-                    ),
-                    0.0,
-                    True,
-                    "Document appears to be empty or unreadable",
+            if is_image:
+                # Use Claude Vision for image documents
+                self.logger.info(
+                    "using_vision_extraction",
+                    document_id=str(input_data.document_id),
+                    filename=input_data.filename,
                 )
+                extraction_result = await self._call_claude_vision(
+                    document_bytes,
+                    input_data.document_type,
+                    input_data.filename,
+                )
+            else:
+                # Extract text from document (PDF or text)
+                document_text = await self._extract_text(document_bytes, input_data.filename)
 
-            # 3. Call Claude API for extraction
-            extraction_result = await self._call_claude(
-                document_text,
-                input_data.document_type,
-                input_data.filename,
-            )
+                if not document_text.strip():
+                    # Try Vision as fallback for potentially scanned PDFs
+                    if input_data.filename.lower().endswith(".pdf"):
+                        self.logger.info(
+                            "pdf_text_empty_trying_vision",
+                            document_id=str(input_data.document_id),
+                        )
+                        extraction_result = await self._call_claude_vision(
+                            document_bytes,
+                            input_data.document_type,
+                            input_data.filename,
+                        )
+                    else:
+                        return (
+                            DocumentExtractOutput(
+                                document_id=input_data.document_id,
+                                document_type_detected=input_data.document_type,
+                                unclear_items=["Could not extract text from document"],
+                            ),
+                            0.0,
+                            True,
+                            "Document appears to be empty or unreadable",
+                        )
+                else:
+                    # 3. Call Claude API for text extraction
+                    extraction_result = await self._call_claude(
+                        document_text,
+                        input_data.document_type,
+                        input_data.filename,
+                    )
 
             # 4. Parse the response
             output = self._parse_extraction_result(
@@ -297,15 +349,29 @@ class DocumentExtractAgent(BaseAgent[DocumentExtractInput, DocumentExtractOutput
                 f"Extraction failed: {str(e)}",
             )
 
+    def _is_image_document(self, filename: str) -> bool:
+        """Check if the document is an image file."""
+        filename_lower = filename.lower()
+        return any(filename_lower.endswith(ext) for ext in IMAGE_MIME_TYPES.keys())
+
+    def _get_mime_type(self, filename: str) -> str:
+        """Get MIME type for image file."""
+        filename_lower = filename.lower()
+        for ext, mime in IMAGE_MIME_TYPES.items():
+            if filename_lower.endswith(ext):
+                return mime
+        return "image/jpeg"  # Default
+
     async def _extract_text(self, content: bytes, filename: str) -> str:
         """Extract text content from document."""
         filename_lower = filename.lower()
 
         if filename_lower.endswith(".pdf"):
-            return self._extract_pdf_text(content)
-        elif filename_lower.endswith((".jpg", ".jpeg", ".png", ".tiff")):
-            # For images, we'll use Claude's vision capabilities
-            return f"[IMAGE: {filename}]"
+            text = self._extract_pdf_text(content)
+            # If PDF text extraction yields minimal content, it might be scanned
+            if len(text.strip()) < 100:
+                self.logger.info("pdf_minimal_text", chars=len(text.strip()))
+            return text
         else:
             # Try to decode as text
             try:
@@ -328,6 +394,132 @@ class DocumentExtractAgent(BaseAgent[DocumentExtractInput, DocumentExtractOutput
         except Exception as e:
             self.logger.warning("pdf_extraction_failed", error=str(e))
             return ""
+
+    async def _call_claude_vision(
+        self,
+        image_content: bytes,
+        document_type: str,
+        filename: str,
+    ) -> str:
+        """Call Claude Vision API for image document extraction.
+
+        Uses Claude's vision capabilities to extract text and structured
+        data from image documents (scanned contracts, photos, etc.).
+        """
+        # Get MIME type for the image
+        mime_type = self._get_mime_type(filename)
+
+        # Encode image as base64
+        base64_image = base64.b64encode(image_content).decode("utf-8")
+
+        # Build the vision prompt
+        vision_prompt = f"""You are a document extraction assistant for Florida real estate transactions.
+You are looking at an image of a real estate document.
+
+IMPORTANT COMPLIANCE NOTES:
+- Only extract factual information that is explicitly visible in the image
+- Do NOT make assumptions or interpretations about contract terms
+- If information is unclear, blurry, or hard to read, flag it for human review
+- Do NOT provide any legal advice or recommendations
+
+Document Type: {document_type}
+Filename: {filename}
+
+Please extract all text and information visible in this document image and return a JSON object with this structure:
+{{
+  "document_type_detected": "purchase_contract",
+  "property_address": {{"street": "", "unit": null, "city": "", "state": "FL", "zip_code": "", "county": null}},
+  "purchase_price": 350000.00,
+  "earnest_money": 10000.00,
+  "parties": [
+    {{"role": "buyer", "name": "", "email": null, "phone": null, "company": null}}
+  ],
+  "effective_date": "2024-12-20",
+  "closing_date": "2025-01-20",
+  "dates": [
+    {{"date_type": "inspection_deadline", "value": "2024-12-30", "source_text": "within 10 days", "confidence": 0.9}}
+  ],
+  "contingencies": [
+    {{"contingency_type": "inspection", "deadline_date": "2024-12-30", "days_from_effective": 10, "description": "Buyer inspection period", "waived": false}}
+  ],
+  "missing_signatures": [],
+  "unclear_items": [],
+  "additional_data": {{}}
+}}
+
+Extract any visible:
+1. Property address (street, city, state, zip, county)
+2. Financial terms (purchase price, earnest money)
+3. Party names and contact info (buyers, sellers, agents)
+4. Key dates (effective date, closing date, deadlines)
+5. Contingencies and their terms
+6. Missing signatures or blank fields
+7. Any unclear or hard-to-read sections
+
+Return ONLY the JSON object, no other text."""
+
+        try:
+            message = await self.client.messages.create(
+                model=settings.anthropic_model,
+                max_tokens=settings.anthropic_max_tokens,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": mime_type,
+                                    "data": base64_image,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": vision_prompt,
+                            },
+                        ],
+                    }
+                ],
+            )
+
+            # Validate response structure
+            if not message.content:
+                self.logger.error("claude_vision_empty_response")
+                raise AIServiceError(message="AI Vision returned empty response")
+
+            # Find text content block
+            text_content = None
+            for block in message.content:
+                if hasattr(block, "text"):
+                    text_content = block.text
+                    break
+
+            if not text_content:
+                self.logger.error(
+                    "claude_vision_no_text_content",
+                    content_types=[type(b).__name__ for b in message.content],
+                )
+                raise AIServiceError(message="AI Vision response did not contain text content")
+
+            self.logger.info(
+                "vision_extraction_completed",
+                filename=filename,
+                response_length=len(text_content),
+            )
+
+            return text_content
+
+        except APITimeoutError as e:
+            self.logger.error("claude_vision_timeout", error=str(e))
+            raise AIServiceError(message="AI Vision extraction timed out. Please try again.")
+        except APIError as e:
+            self.logger.error(
+                "claude_vision_api_error",
+                error=str(e),
+                status_code=getattr(e, "status_code", None),
+            )
+            raise AIServiceError(message=f"AI Vision service error: {getattr(e, 'message', str(e))}")
 
     async def _call_claude(
         self,

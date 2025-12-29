@@ -22,6 +22,7 @@ const navigation = [
   { name: 'Deadlines', href: '/deadlines', icon: Calendar },
   { name: 'Review Queue', href: '/documents/review', icon: AlertCircle },
   { name: 'Reports', href: '/reports', icon: BarChart3 },
+  { name: 'Settings', href: '/settings', icon: Settings },
 ];
 
 export function Sidebar() {
