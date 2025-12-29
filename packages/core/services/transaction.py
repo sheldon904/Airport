@@ -39,6 +39,8 @@ class TransactionService:
         property_address: dict[str, str],
         purchase_price: Decimal | None = None,
         year_built: int | None = None,
+        closing_date: date | None = None,
+        parties: list[dict[str, Any]] | None = None,
         notes: str | None = None,
     ) -> TransactionModel:
         """
@@ -56,9 +58,10 @@ class TransactionService:
             property_address=property_address,
             purchase_price=purchase_price,
             year_built=year_built,
+            closing_date=closing_date,
             status=TransactionStatus.DRAFT,
             notes=notes,
-            parties=[],
+            parties=parties or [],
         )
 
         # Initialize FL checklist

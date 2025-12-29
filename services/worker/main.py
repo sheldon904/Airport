@@ -403,15 +403,25 @@ class Worker:
             notifications_sent = 0
             for user in users:
                 if user.role in ["admin", "broker", "agent"]:
+                    # Create context for the notification agent
+                    context = AgentContext(
+                        execution_id=UUID(deadline_id),
+                        transaction_id=UUID(transaction_id),
+                        organization_id=UUID(organization_id),
+                        triggered_by="worker",
+                        triggered_at=datetime.utcnow(),
+                    )
+
                     await self.notification_agent.send_deadline_reminder(
+                        context=context,
                         user_id=user.id,
-                        user_email=user.email,
-                        user_name=user.full_name,
+                        organization_id=UUID(organization_id),
+                        transaction_id=UUID(transaction_id),
+                        recipient_email=user.email,
                         deadline_name=deadline.name,
-                        deadline_date=str(deadline.due_date),
+                        due_date=str(deadline.due_date),
                         days_remaining=days_remaining,
                         property_address=address_str,
-                        transaction_id=str(transaction.id),
                     )
                     notifications_sent += 1
 

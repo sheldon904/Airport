@@ -353,13 +353,34 @@ class DocumentExtractAgent(BaseAgent[DocumentExtractInput, DocumentExtractOutput
                 max_tokens=settings.anthropic_max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return message.content[0].text
+
+            # Validate response structure
+            if not message.content:
+                self.logger.error("claude_empty_response")
+                raise AIServiceError(message="AI returned empty response")
+
+            # Find text content block
+            text_content = None
+            for block in message.content:
+                if hasattr(block, "text"):
+                    text_content = block.text
+                    break
+
+            if not text_content:
+                self.logger.error(
+                    "claude_no_text_content",
+                    content_types=[type(b).__name__ for b in message.content],
+                )
+                raise AIServiceError(message="AI response did not contain text content")
+
+            return text_content
+
         except APITimeoutError as e:
             self.logger.error("claude_timeout", error=str(e))
             raise AIServiceError(message="AI extraction timed out. Please try again.")
         except APIError as e:
-            self.logger.error("claude_api_error", error=str(e), status_code=e.status_code)
-            raise AIServiceError(message=f"AI service error: {e.message}")
+            self.logger.error("claude_api_error", error=str(e), status_code=getattr(e, 'status_code', None))
+            raise AIServiceError(message=f"AI service error: {getattr(e, 'message', str(e))}")
 
     def _parse_extraction_result(
         self,

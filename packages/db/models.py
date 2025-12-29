@@ -12,6 +12,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -137,10 +138,18 @@ class TransactionModel(Base):
 
     # Relationships
     organization: Mapped["OrganizationModel"] = relationship(back_populates="transactions")
-    documents: Mapped[list["DocumentModel"]] = relationship(back_populates="transaction")
-    deadlines: Mapped[list["DeadlineModel"]] = relationship(back_populates="transaction")
-    checklist: Mapped["ChecklistModel | None"] = relationship(back_populates="transaction")
-    audit_logs: Mapped[list["AuditLogModel"]] = relationship(back_populates="transaction")
+    documents: Mapped[list["DocumentModel"]] = relationship(
+        back_populates="transaction", cascade="all, delete-orphan"
+    )
+    deadlines: Mapped[list["DeadlineModel"]] = relationship(
+        back_populates="transaction", cascade="all, delete-orphan"
+    )
+    checklist: Mapped["ChecklistModel | None"] = relationship(
+        back_populates="transaction", cascade="all, delete-orphan"
+    )
+    audit_logs: Mapped[list["AuditLogModel"]] = relationship(
+        back_populates="transaction", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_transactions_organization_id", "organization_id"),
@@ -156,7 +165,7 @@ class DocumentModel(Base):
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     transaction_id: Mapped[UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("transactions.id"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False
     )
     uploaded_by: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False
@@ -188,6 +197,7 @@ class DocumentModel(Base):
     __table_args__ = (
         Index("ix_documents_transaction_id", "transaction_id"),
         Index("ix_documents_status", "status"),
+        Index("ix_documents_uploaded_by", "uploaded_by"),
     )
 
 
@@ -198,10 +208,10 @@ class DeadlineModel(Base):
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     transaction_id: Mapped[UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("transactions.id"), nullable=False
+        PGUUID(as_uuid=True), ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False
     )
     source_document_id: Mapped[UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("documents.id")
+        PGUUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL")
     )
 
     # Deadline info
@@ -235,6 +245,7 @@ class DeadlineModel(Base):
         Index("ix_deadlines_transaction_id", "transaction_id"),
         Index("ix_deadlines_due_date", "due_date"),
         Index("ix_deadlines_status", "status"),
+        Index("ix_deadlines_completed_by", "completed_by"),
     )
 
 
@@ -245,7 +256,7 @@ class ChecklistModel(Base):
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     transaction_id: Mapped[UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("transactions.id"), nullable=False, unique=True
+        PGUUID(as_uuid=True), ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False, unique=True
     )
 
     # Template reference
@@ -271,9 +282,11 @@ class AuditLogModel(Base):
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     transaction_id: Mapped[UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("transactions.id")
+        PGUUID(as_uuid=True), ForeignKey("transactions.id", ondelete="CASCADE")
     )
-    user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id"))
+    user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
 
     # Event info
     action: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -296,4 +309,30 @@ class AuditLogModel(Base):
         Index("ix_audit_logs_transaction_id", "transaction_id"),
         Index("ix_audit_logs_created_at", "created_at"),
         Index("ix_audit_logs_action", "action"),
+        Index("ix_audit_logs_user_id", "user_id"),
+    )
+
+
+class JobQueueModel(Base):
+    """Background job queue entry."""
+
+    __tablename__ = "job_queue"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    job_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    error: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_job_queue_status_scheduled", "status", "scheduled_at"),
+        Index("ix_job_queue_job_type", "job_type"),
     )

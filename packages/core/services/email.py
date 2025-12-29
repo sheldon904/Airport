@@ -13,6 +13,15 @@ import structlog
 
 from packages.core.config import settings
 
+
+class EmailSendError(Exception):
+    """Raised when email sending fails."""
+
+    def __init__(self, message: str, to_email: str, original_error: Exception | None = None):
+        self.to_email = to_email
+        self.original_error = original_error
+        super().__init__(message)
+
 logger = structlog.get_logger()
 
 
@@ -74,12 +83,14 @@ class SMTPEmailService(EmailService):
         username: str | None = None,
         password: str | None = None,
         use_tls: bool = True,
+        raise_on_error: bool = True,
     ):
         self.host = host
         self.port = port
         self.username = username
         self.password = password
         self.use_tls = use_tls
+        self.raise_on_error = raise_on_error
         self.logger = logger.bind(service="email", backend="smtp")
 
     async def send_email(
@@ -128,6 +139,12 @@ class SMTPEmailService(EmailService):
                 to_email=to_email,
                 error=str(e),
             )
+            if self.raise_on_error:
+                raise EmailSendError(
+                    f"Failed to send email to {to_email}: {e}",
+                    to_email=to_email,
+                    original_error=e,
+                )
             return False
 
     def _send_smtp(
@@ -375,14 +392,20 @@ def get_email_service() -> EmailService:
         _email_service = ConsoleEmailService()
     elif settings.smtp_user and settings.smtp_password:
         # Use SMTP service if credentials configured
+        # In production, raise exceptions so failures are tracked/alerted
         _email_service = SMTPEmailService(
             host=settings.smtp_host,
             port=settings.smtp_port,
             username=settings.smtp_user,
             password=settings.smtp_password,
+            raise_on_error=(settings.environment == "production"),
         )
     else:
         # Use queued service with console fallback
+        logger.warning(
+            "email_config_missing",
+            message="SMTP credentials not configured - emails will be queued but not sent",
+        )
         _email_service = QueuedEmailService()
 
     return _email_service

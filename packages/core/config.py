@@ -73,6 +73,16 @@ class Settings(BaseSettings):
     extraction_confidence_threshold: float = 0.85
     require_human_review_below: float = 0.70
 
+    # Rate Limiting
+    rate_limit_requests: int = 100
+    rate_limit_window_seconds: int = 60
+    rate_limit_auth_requests: int = 5
+    rate_limit_auth_window_seconds: int = 60
+
+    # Logging
+    log_level: str = "INFO"
+    log_format: str = "json"
+
     @model_validator(mode="after")
     def validate_production_settings(self) -> "Settings":
         """Validate critical settings for production environment."""

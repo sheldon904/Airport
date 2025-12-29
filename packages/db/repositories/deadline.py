@@ -5,6 +5,7 @@ from typing import Sequence
 from uuid import UUID
 
 from sqlalchemy import and_, select
+from sqlalchemy.orm import selectinload
 
 from packages.db.models import DeadlineModel, TransactionModel
 from packages.db.repositories.base import BaseRepository
@@ -40,6 +41,8 @@ class DeadlineRepository(BaseRepository[DeadlineModel]):
         self,
         organization_id: UUID | None = None,
         days_ahead: int = 7,
+        *,
+        load_transaction: bool = False,
     ) -> Sequence[DeadlineModel]:
         """Get upcoming deadlines within N days."""
         today = date.today()
@@ -59,6 +62,9 @@ class DeadlineRepository(BaseRepository[DeadlineModel]):
 
         if organization_id:
             query = query.where(TransactionModel.organization_id == organization_id)
+
+        if load_transaction:
+            query = query.options(selectinload(self.model.transaction))
 
         query = query.order_by(self.model.due_date)
 
@@ -131,17 +137,21 @@ class DeadlineRepository(BaseRepository[DeadlineModel]):
     async def get_needing_reminder(
         self,
         target_date: date,
+        *,
+        load_transaction: bool = False,
     ) -> Sequence[DeadlineModel]:
         """Get deadlines that need a reminder sent today."""
-        result = await self.session.execute(
-            select(self.model).where(
-                and_(
-                    self.model.due_date > target_date,
-                    self.model.status.in_(["upcoming", "due_soon"]),
-                )
+        query = select(self.model).where(
+            and_(
+                self.model.due_date > target_date,
+                self.model.status.in_(["upcoming", "due_soon"]),
             )
         )
 
+        if load_transaction:
+            query = query.options(selectinload(self.model.transaction))
+
+        result = await self.session.execute(query)
         deadlines = result.scalars().all()
 
         # Filter by reminder days
