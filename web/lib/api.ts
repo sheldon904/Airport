@@ -14,6 +14,8 @@ import type {
   CreateTransactionForm,
   CreateDeadlineForm,
   PropertyAddress,
+  TransactionSummaryReport,
+  OrganizationOverviewReport,
 } from '@/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
@@ -330,6 +332,37 @@ class ApiClient {
 
   async deleteDeadline(id: string): Promise<void> {
     await this.client.delete(`/api/v1/deadlines/${id}`);
+  }
+
+  // Reports
+  async getTransactionReport(
+    transactionId: string,
+    format: 'json' | 'html' = 'json'
+  ): Promise<TransactionSummaryReport> {
+    const response = await this.client.post(
+      `/api/v1/reports/transactions/${transactionId}`,
+      null,
+      { params: { format } }
+    );
+    return response.data;
+  }
+
+  async downloadTransactionReport(transactionId: string): Promise<Blob> {
+    const response = await this.client.get(
+      `/api/v1/reports/transactions/${transactionId}/download`,
+      { responseType: 'blob' }
+    );
+    return response.data;
+  }
+
+  async getOrganizationReport(): Promise<OrganizationOverviewReport> {
+    const response = await this.client.get('/api/v1/reports/organization');
+    return response.data;
+  }
+
+  async getDashboardMetrics(): Promise<DashboardData> {
+    const response = await this.client.get('/api/v1/reports/dashboard');
+    return response.data;
   }
 }
 

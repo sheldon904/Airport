@@ -5,19 +5,24 @@ from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import structlog
 
 from packages.core.config import settings
-from services.api.routers import auth, transactions, documents, deadlines, health
+from packages.core.exceptions import register_exception_handlers
+from packages.core.rate_limit import RateLimitMiddleware
+from services.api.routers import auth, transactions, documents, deadlines, health, reports
+
+logger = structlog.get_logger()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
     # Startup
-    print(f"Starting {settings.app_name} API...")
+    logger.info("api_starting", app_name=settings.app_name, environment=settings.environment)
     yield
     # Shutdown
-    print(f"Shutting down {settings.app_name} API...")
+    logger.info("api_shutting_down", app_name=settings.app_name)
 
 
 app = FastAPI(
@@ -28,6 +33,12 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# Register exception handlers
+register_exception_handlers(app)
+
+# Rate limiting middleware (must be before CORS)
+app.add_middleware(RateLimitMiddleware)
 
 # CORS middleware - configured via environment
 app.add_middleware(
@@ -44,3 +55,4 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(transactions.router, prefix="/api/v1/transactions", tags=["Transactions"])
 app.include_router(documents.router, prefix="/api/v1/documents", tags=["Documents"])
 app.include_router(deadlines.router, prefix="/api/v1/deadlines", tags=["Deadlines"])
+app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])

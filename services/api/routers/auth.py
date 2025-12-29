@@ -1,10 +1,17 @@
 """Authentication endpoints."""
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 
 from packages.core.config import settings
-from services.api.dependencies import AuthServiceDep, CurrentUserDep
+from packages.core.exceptions import (
+    AuthenticationError,
+    AuthorizationError,
+    DuplicateEmailError,
+    WeakPasswordError,
+)
+from packages.core.services.audit import AuditAction, AuditService
+from services.api.dependencies import AuthServiceDep, CurrentUserDep, DbSessionDep
 
 router = APIRouter()
 
@@ -13,10 +20,15 @@ def validate_password_strength(password: str) -> None:
     """Validate password meets security requirements."""
     is_valid, error_message = settings.validate_password(password)
     if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_message,
-        )
+        raise WeakPasswordError(message=error_message)
+
+
+def get_client_ip(request: Request) -> str | None:
+    """Extract client IP from request."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
 
 
 # === Request/Response Models ===
@@ -177,22 +189,46 @@ async def register_organization(
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
-    request: LoginRequest,
+    login_request: LoginRequest,
+    request: Request,
     service: AuthServiceDep,
+    db: DbSessionDep,
 ) -> TokenResponse:
     """
     Login with email and password.
 
     Returns access and refresh tokens.
     """
-    tokens = await service.login(request.email, request.password)
+    audit = AuditService(db)
+    client_ip = get_client_ip(request)
+    user_agent = request.headers.get("User-Agent")
+
+    tokens = await service.login(login_request.email, login_request.password)
 
     if not tokens:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-            headers={"WWW-Authenticate": "Bearer"},
+        # Log failed login attempt
+        await audit.log_auth_action(
+            AuditAction.LOGIN_FAILED,
+            user_id=None,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            success=False,
+            details={"email": login_request.email},
         )
+        await db.commit()
+        raise AuthenticationError(message="Invalid email or password")
+
+    # Get user for audit log
+    user = await service.get_current_user(tokens.access_token)
+    if user:
+        await audit.log_auth_action(
+            AuditAction.USER_LOGIN,
+            user_id=user.id,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            success=True,
+        )
+        await db.commit()
 
     return TokenResponse(
         access_token=tokens.access_token,

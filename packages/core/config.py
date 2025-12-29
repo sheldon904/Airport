@@ -49,6 +49,9 @@ class Settings(BaseSettings):
 
     # Anthropic
     anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-20250514"
+    anthropic_max_tokens: int = 4096
+    anthropic_timeout_seconds: int = 120
 
     # Email (for notifications)
     smtp_host: str = "localhost"
