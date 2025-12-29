@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
-import { useTransaction, useDeleteTransaction } from '@/hooks';
+import { useTransaction, useDeleteTransaction, useAddParty, useRemoveParty } from '@/hooks';
 import { useDocuments, useUploadDocument } from '@/hooks';
 import { useDeadlines, useCompleteDeadline } from '@/hooks';
 import {
@@ -21,10 +21,20 @@ import {
   Download,
   Eye,
   Loader2,
+  Users,
+  Plus,
+  ChevronDown,
+  ChevronUp,
+  X,
+  Phone,
+  Mail,
+  Building2,
+  UserCircle,
 } from 'lucide-react';
 import Link from 'next/link';
 import { formatCurrency, formatDate, getStatusColor, formatAddress } from '@/lib/utils';
 import { useDropzone } from 'react-dropzone';
+import type { Party } from '@/types';
 
 const documentTypes = [
   { value: 'contract', label: 'Purchase Contract' },
@@ -36,6 +46,248 @@ const documentTypes = [
   { value: 'closing', label: 'Closing Document' },
   { value: 'other', label: 'Other' },
 ];
+
+const partyRoles = [
+  { value: 'buyer', label: 'Buyer' },
+  { value: 'seller', label: 'Seller' },
+  { value: 'buyer_agent', label: 'Buyer Agent' },
+  { value: 'seller_agent', label: 'Seller/Listing Agent' },
+  { value: 'title_company', label: 'Title Company' },
+  { value: 'lender', label: 'Lender' },
+  { value: 'appraiser', label: 'Appraiser' },
+  { value: 'inspector', label: 'Inspector' },
+  { value: 'attorney', label: 'Attorney' },
+  { value: 'escrow', label: 'Escrow Officer' },
+  { value: 'other', label: 'Other' },
+];
+
+function PartyCard({
+  party,
+  onRemove,
+  isRemoving,
+}: {
+  party: Party;
+  onRemove: () => void;
+  isRemoving: boolean;
+}) {
+  const roleLabel = partyRoles.find((r) => r.value === party.role)?.label || party.role;
+
+  return (
+    <div className="border rounded-lg p-4 hover:border-primary-300 transition-colors bg-white">
+      <div className="flex items-start justify-between">
+        <div className="flex items-start space-x-3">
+          <div className="flex-shrink-0">
+            <UserCircle className="h-10 w-10 text-gray-400" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-gray-900">{party.name}</p>
+            <p className="text-xs text-primary-600 font-medium">{roleLabel}</p>
+            <div className="mt-2 space-y-1">
+              {party.email && (
+                <div className="flex items-center text-xs text-gray-500">
+                  <Mail className="h-3 w-3 mr-1.5" />
+                  <a href={`mailto:${party.email}`} className="hover:text-primary-600">
+                    {party.email}
+                  </a>
+                </div>
+              )}
+              {party.phone && (
+                <div className="flex items-center text-xs text-gray-500">
+                  <Phone className="h-3 w-3 mr-1.5" />
+                  <a href={`tel:${party.phone}`} className="hover:text-primary-600">
+                    {party.phone}
+                  </a>
+                </div>
+              )}
+              {party.company && (
+                <div className="flex items-center text-xs text-gray-500">
+                  <Building2 className="h-3 w-3 mr-1.5" />
+                  {party.company}
+                </div>
+              )}
+              {party.license_number && (
+                <div className="text-xs text-gray-400">
+                  License: {party.license_number}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={onRemove}
+          disabled={isRemoving}
+          className="p-1 text-gray-400 hover:text-red-500 disabled:opacity-50"
+          title="Remove party"
+        >
+          {isRemoving ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Trash2 className="h-4 w-4" />
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AddPartyForm({
+  onAdd,
+  onCancel,
+  isAdding,
+}: {
+  onAdd: (party: Omit<Party, 'id'>) => void;
+  onCancel: () => void;
+  isAdding: boolean;
+}) {
+  const [formData, setFormData] = useState({
+    role: 'buyer',
+    name: '',
+    email: '',
+    phone: '',
+    company: '',
+    license_number: '',
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name.trim()) return;
+    onAdd({
+      role: formData.role,
+      name: formData.name.trim(),
+      email: formData.email.trim() || undefined,
+      phone: formData.phone.trim() || undefined,
+      company: formData.company.trim() || undefined,
+      license_number: formData.license_number.trim() || undefined,
+    });
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="border rounded-lg p-4 bg-gray-50 space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-medium text-gray-900">Add New Party</h4>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="p-1 text-gray-400 hover:text-gray-600"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2 sm:col-span-1">
+          <label className="block text-xs font-medium text-gray-700 mb-1">
+            Role *
+          </label>
+          <select
+            value={formData.role}
+            onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+            className="w-full text-sm rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+          >
+            {partyRoles.map((role) => (
+              <option key={role.value} value={role.value}>
+                {role.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="col-span-2 sm:col-span-1">
+          <label className="block text-xs font-medium text-gray-700 mb-1">
+            Name *
+          </label>
+          <input
+            type="text"
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            className="w-full text-sm rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+            placeholder="John Smith"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">
+            Email
+          </label>
+          <input
+            type="email"
+            value={formData.email}
+            onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+            className="w-full text-sm rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+            placeholder="john@example.com"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">
+            Phone
+          </label>
+          <input
+            type="tel"
+            value={formData.phone}
+            onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+            className="w-full text-sm rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+            placeholder="(555) 123-4567"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">
+            Company
+          </label>
+          <input
+            type="text"
+            value={formData.company}
+            onChange={(e) => setFormData({ ...formData, company: e.target.value })}
+            className="w-full text-sm rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+            placeholder="ABC Realty"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">
+            License #
+          </label>
+          <input
+            type="text"
+            value={formData.license_number}
+            onChange={(e) => setFormData({ ...formData, license_number: e.target.value })}
+            className="w-full text-sm rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+            placeholder="BK1234567"
+          />
+        </div>
+      </div>
+
+      <div className="flex justify-end space-x-2 pt-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={isAdding || !formData.name.trim()}
+          className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 disabled:opacity-50"
+        >
+          {isAdding ? (
+            <>
+              <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+              Adding...
+            </>
+          ) : (
+            <>
+              <Plus className="h-3 w-3 mr-1.5" />
+              Add Party
+            </>
+          )}
+        </button>
+      </div>
+    </form>
+  );
+}
 
 function DocumentCard({
   id,
@@ -210,9 +462,14 @@ export default function TransactionDetailPage() {
   const deleteTransaction = useDeleteTransaction();
   const uploadDocument = useUploadDocument();
   const completeDeadline = useCompleteDeadline();
+  const addParty = useAddParty();
+  const removeParty = useRemoveParty();
 
   const [selectedDocType, setSelectedDocType] = useState('contract');
   const [completingDeadlineId, setCompletingDeadlineId] = useState<string | null>(null);
+  const [showParties, setShowParties] = useState(true);
+  const [showAddParty, setShowAddParty] = useState(false);
+  const [removingPartyId, setRemovingPartyId] = useState<string | null>(null);
 
   const onDrop = useCallback(
     async (acceptedFiles: File[]) => {
@@ -248,6 +505,27 @@ export default function TransactionDetailPage() {
       await completeDeadline.mutateAsync(deadlineId);
     } finally {
       setCompletingDeadlineId(null);
+    }
+  };
+
+  const handleAddParty = async (party: Omit<Party, 'id'>) => {
+    try {
+      await addParty.mutateAsync({ transactionId, party });
+      setShowAddParty(false);
+    } catch (error) {
+      console.error('Failed to add party:', error);
+    }
+  };
+
+  const handleRemoveParty = async (partyId: string) => {
+    if (!confirm('Are you sure you want to remove this party?')) return;
+    setRemovingPartyId(partyId);
+    try {
+      await removeParty.mutateAsync({ transactionId, partyId });
+    } catch (error) {
+      console.error('Failed to remove party:', error);
+    } finally {
+      setRemovingPartyId(null);
     }
   };
 
@@ -365,6 +643,67 @@ export default function TransactionDetailPage() {
                   </div>
                 )}
               </dl>
+            </div>
+
+            {/* Parties Section */}
+            <div className="bg-white shadow rounded-lg">
+              <button
+                onClick={() => setShowParties(!showParties)}
+                className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-gray-50 transition-colors rounded-t-lg"
+              >
+                <div className="flex items-center">
+                  <Users className="h-5 w-5 text-gray-400 mr-2" />
+                  <h2 className="text-lg font-medium text-gray-900">
+                    Parties ({transaction.parties?.length || 0})
+                  </h2>
+                </div>
+                {showParties ? (
+                  <ChevronUp className="h-5 w-5 text-gray-400" />
+                ) : (
+                  <ChevronDown className="h-5 w-5 text-gray-400" />
+                )}
+              </button>
+
+              {showParties && (
+                <div className="px-6 pb-6 space-y-4">
+                  {/* Parties list */}
+                  {transaction.parties && transaction.parties.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {transaction.parties.map((party) => (
+                        <PartyCard
+                          key={party.id}
+                          party={party}
+                          onRemove={() => party.id && handleRemoveParty(party.id)}
+                          isRemoving={removingPartyId === party.id}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    !showAddParty && (
+                      <p className="text-sm text-gray-500 text-center py-4">
+                        No parties added yet
+                      </p>
+                    )
+                  )}
+
+                  {/* Add party form or button */}
+                  {showAddParty ? (
+                    <AddPartyForm
+                      onAdd={handleAddParty}
+                      onCancel={() => setShowAddParty(false)}
+                      isAdding={addParty.isPending}
+                    />
+                  ) : (
+                    <button
+                      onClick={() => setShowAddParty(true)}
+                      className="inline-flex items-center px-3 py-2 text-sm font-medium text-primary-600 bg-primary-50 rounded-md hover:bg-primary-100 transition-colors"
+                    >
+                      <Plus className="h-4 w-4 mr-1.5" />
+                      Add Party
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Documents */}
