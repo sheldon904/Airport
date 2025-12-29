@@ -99,7 +99,11 @@ class UserModel(Base):
 
 
 class TransactionModel(Base):
-    """Real estate transaction."""
+    """Real estate transaction.
+
+    Supports soft delete via deleted_at column. Transactions marked as deleted
+    preserve all relationships (documents, deadlines, audit logs) for compliance.
+    """
 
     __tablename__ = "transactions"
 
@@ -120,6 +124,11 @@ class TransactionModel(Base):
     purchase_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     year_built: Mapped[int | None] = mapped_column()
 
+    # Transaction Metadata (for conditional compliance)
+    is_hoa: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_condo: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_financed: Mapped[bool] = mapped_column(Boolean, default=True)
+
     # Key Dates
     effective_date: Mapped[date | None] = mapped_column(Date)
     closing_date: Mapped[date | None] = mapped_column(Date)
@@ -129,6 +138,12 @@ class TransactionModel(Base):
 
     # Notes
     notes: Mapped[str | None] = mapped_column(Text)
+
+    # Soft delete support for compliance (preserves audit trail)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deleted_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -148,13 +163,19 @@ class TransactionModel(Base):
         back_populates="transaction", cascade="all, delete-orphan"
     )
     audit_logs: Mapped[list["AuditLogModel"]] = relationship(
-        back_populates="transaction", cascade="all, delete-orphan"
+        back_populates="transaction"  # No cascade - audit logs preserved on delete
     )
+
+    @property
+    def is_deleted(self) -> bool:
+        """Check if transaction is soft-deleted."""
+        return self.deleted_at is not None
 
     __table_args__ = (
         Index("ix_transactions_organization_id", "organization_id"),
         Index("ix_transactions_status", "status"),
         Index("ix_transactions_closing_date", "closing_date"),
+        Index("ix_transactions_deleted_at", "deleted_at"),
     )
 
 
@@ -276,13 +297,20 @@ class ChecklistModel(Base):
 
 
 class AuditLogModel(Base):
-    """Audit trail for compliance."""
+    """Audit trail for compliance.
+
+    IMPORTANT: Audit logs use SET NULL on transaction deletion to preserve
+    compliance records. This is required for:
+    - RESPA/TRID compliance (3 years minimum retention)
+    - Florida broker records (5 years per F.S. 475.5015)
+    - General compliance audit requirements
+    """
 
     __tablename__ = "audit_logs"
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     transaction_id: Mapped[UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("transactions.id", ondelete="CASCADE")
+        PGUUID(as_uuid=True), ForeignKey("transactions.id", ondelete="SET NULL")
     )
     user_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
