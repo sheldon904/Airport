@@ -118,3 +118,21 @@ class DocumentRepository(BaseRepository[DocumentModel]):
             status="needs_review",
             needs_review_reason=f"Extraction failed: {error_reason}",
         )
+
+    async def count_needing_review_by_organization(
+        self,
+        organization_id: UUID,
+    ) -> int:
+        """Count documents needing review for an organization."""
+        from sqlalchemy import func
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(self.model)
+            .join(TransactionModel, self.model.transaction_id == TransactionModel.id)
+            .where(
+                TransactionModel.organization_id == organization_id,
+                self.model.status == "needs_review",
+            )
+        )
+        return result.scalar() or 0

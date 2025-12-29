@@ -11,6 +11,7 @@ import {
   LogOut,
   Home,
   AlertCircle,
+  BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth-context';
@@ -20,6 +21,7 @@ const navigation = [
   { name: 'Transactions', href: '/transactions', icon: FileText },
   { name: 'Deadlines', href: '/deadlines', icon: Calendar },
   { name: 'Review Queue', href: '/documents/review', icon: AlertCircle },
+  { name: 'Reports', href: '/reports', icon: BarChart3 },
 ];
 
 export function Sidebar() {

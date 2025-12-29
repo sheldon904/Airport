@@ -6,34 +6,8 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import and_, select, update
 
-from packages.db.models import Base
+from packages.db.models import JobQueueModel
 from packages.db.repositories.base import BaseRepository
-
-
-# Define JobQueueModel here since it wasn't in the original models
-from sqlalchemy import String, Integer, Text, DateTime, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column
-
-
-class JobQueueModel(Base):
-    """Background job queue entry."""
-
-    __tablename__ = "job_queue"
-
-    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
-    job_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), default="pending")
-    priority: Mapped[int] = mapped_column(Integer, default=0)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    error: Mapped[str | None] = mapped_column(Text)
-    attempts: Mapped[int] = mapped_column(Integer, default=0)
-    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
-    scheduled_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    started_at: Mapped[datetime | None] = mapped_column(DateTime)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class JobQueueRepository(BaseRepository[JobQueueModel]):
@@ -148,6 +122,26 @@ class JobQueueRepository(BaseRepository[JobQueueModel]):
         if job_type:
             filters["job_type"] = job_type
         return await self.count(**filters)
+
+    async def get_pending_by_payload_key(
+        self,
+        job_type: str,
+        key: str,
+        value: str,
+    ) -> JobQueueModel | None:
+        """Get a pending job with a specific payload value."""
+        from sqlalchemy.dialects.postgresql import JSONB
+
+        result = await self.session.execute(
+            select(self.model).where(
+                and_(
+                    self.model.job_type == job_type,
+                    self.model.status == "pending",
+                    self.model.payload[key].astext == value,
+                )
+            ).limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def get_failed_jobs(
         self,

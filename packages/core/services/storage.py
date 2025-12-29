@@ -10,6 +10,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from packages.core.config import settings
+from packages.core.exceptions import StorageError
 
 
 class StorageService:
@@ -214,12 +215,6 @@ class StorageService:
                 )
             else:
                 raise StorageError(f"Failed to check bucket: {e}")
-
-
-class StorageError(Exception):
-    """Exception raised for storage operations."""
-
-    pass
 
 
 # Singleton instance

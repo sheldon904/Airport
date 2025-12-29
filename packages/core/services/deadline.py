@@ -153,15 +153,19 @@ class DeadlineService:
         Get upcoming deadlines across all transactions.
 
         Returns enriched deadline data with transaction info.
+        Uses eager loading to avoid N+1 query problem.
         """
+        # Use eager loading to fetch transactions in a single query
         deadlines = await self.deadline_repo.get_upcoming(
             organization_id=organization_id,
             days_ahead=days_ahead,
+            load_transaction=True,
         )
 
         result = []
         for deadline in deadlines:
-            transaction = await self.transaction_repo.get_by_id(deadline.transaction_id)
+            # Transaction is already loaded via eager loading
+            transaction = deadline.transaction
             if transaction and transaction.organization_id == organization_id:
                 days_remaining = (deadline.due_date - date.today()).days
                 is_statutory = deadline.deadline_type in self.STATUTORY_DEADLINE_TYPES
@@ -322,13 +326,19 @@ class DeadlineService:
         Get deadlines that need reminder notifications today.
 
         Called by background worker to send reminders.
+        Uses eager loading to avoid N+1 query problem.
         """
         today = date.today()
-        deadlines = await self.deadline_repo.get_needing_reminder(today)
+        # Use eager loading to fetch transactions in a single query
+        deadlines = await self.deadline_repo.get_needing_reminder(
+            today,
+            load_transaction=True,
+        )
 
         reminders = []
         for deadline in deadlines:
-            transaction = await self.transaction_repo.get_by_id(deadline.transaction_id)
+            # Transaction is already loaded via eager loading
+            transaction = deadline.transaction
             if transaction:
                 days_until = (deadline.due_date - today).days
                 reminders.append({

@@ -52,3 +52,8 @@ CMD ["python", "-m", "services.agents.deadline"]
 FROM base as worker
 
 CMD ["python", "-m", "services.worker"]
+
+# === Scheduler (periodic tasks) ===
+FROM base as scheduler
+
+CMD ["python", "-m", "services.scheduler"]

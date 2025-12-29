@@ -49,6 +49,9 @@ class Settings(BaseSettings):
 
     # Anthropic
     anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-20250514"
+    anthropic_max_tokens: int = 4096
+    anthropic_timeout_seconds: int = 120
 
     # Email (for notifications)
     smtp_host: str = "localhost"
@@ -69,6 +72,16 @@ class Settings(BaseSettings):
     agent_timeout_seconds: int = 300
     extraction_confidence_threshold: float = 0.85
     require_human_review_below: float = 0.70
+
+    # Rate Limiting
+    rate_limit_requests: int = 100
+    rate_limit_window_seconds: int = 60
+    rate_limit_auth_requests: int = 5
+    rate_limit_auth_window_seconds: int = 60
+
+    # Logging
+    log_level: str = "INFO"
+    log_format: str = "json"
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> "Settings":
