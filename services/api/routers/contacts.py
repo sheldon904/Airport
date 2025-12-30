@@ -90,12 +90,12 @@ def _contact_to_response(contact) -> ContactResponse:
 
 @router.get("", response_model=ContactListResponse)
 async def list_contacts(
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
     query: str | None = Query(None, description="Search query"),
     contact_type: str | None = Query(None, description="Filter by contact type"),
     limit: int = Query(50, le=100),
     offset: int = Query(0, ge=0),
-    db: DbSessionDep,  # REM-003: Use typed dependency
-    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> ContactListResponse:
     """
     List contacts with optional search and filtering.
@@ -160,10 +160,10 @@ async def create_contact(
 
 @router.get("/repeat-clients")
 async def get_repeat_clients(
-    min_transactions: int = Query(2, ge=2),
-    limit: int = Query(20, le=50),
     db: DbSessionDep,  # REM-003: Use typed dependency
     current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
+    min_transactions: int = Query(2, ge=2),
+    limit: int = Query(20, le=50),
 ) -> dict[str, Any]:
     """
     Get contacts with multiple transactions (VIP/repeat clients).
@@ -185,9 +185,9 @@ async def get_repeat_clients(
 
 @router.get("/recent")
 async def get_recent_contacts(
-    limit: int = Query(10, le=50),
     db: DbSessionDep,  # REM-003: Use typed dependency
     current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
+    limit: int = Query(10, le=50),
 ) -> dict[str, Any]:
     """
     Get most recently updated/created contacts.
