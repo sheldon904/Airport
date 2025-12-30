@@ -33,8 +33,9 @@ class TestFormTemplates:
         template = FL_FORM_TEMPLATES["far_bar_as_is"]
         field_names = {f.name for f in template.fields}
 
-        assert "property_address" in field_names
-        assert "purchase_price" in field_names
+        # Check for actual field names in the template
+        assert "PropertyStreet" in field_names
+        assert "PurchasePrice" in field_names
 
     def test_seller_disclosure_template_exists(self):
         """Seller disclosure template exists."""
@@ -156,7 +157,8 @@ class TestFormPopulationService:
 
     def test_populate_form_not_found(self, service, sample_transaction):
         """Raises error for unknown template."""
-        with pytest.raises(ValueError, match="not found"):
+        from packages.forms.populate import FormPopulationError
+        with pytest.raises(FormPopulationError, match="not found"):
             service.populate_form("nonexistent_form", sample_transaction)
 
     def test_populate_form_identifies_missing(self, service):
@@ -187,18 +189,15 @@ class TestFormPopulationService:
         assert len(results) > 0
         assert all("template_id" in r for r in results)
 
-    def test_get_field_value_with_default(self, service):
-        """Uses field default when no data available."""
-        field = FormField(
-            name="test_field",
-            label="Test",
-            field_type=FieldType.TEXT,
-            data_path="missing.path",
-            default="Default Value",
-        )
-        data = {}
-        value = service._get_field_value(field, data, {})
-        assert value == "Default Value"
+    def test_populate_uses_field_defaults(self, service):
+        """Uses field defaults when data is missing."""
+        # PropertyState field has a default value of "FL"
+        empty_data = {"property_address": {"city": "Miami"}}
+        result = service.populate_form("far_bar_as_is", empty_data)
+
+        # PropertyState should use its default of "FL"
+        populated_fields = result["populated_fields"]
+        assert populated_fields.get("PropertyState") == "FL"
 
 
 class TestDisclosures:
@@ -209,31 +208,34 @@ class TestDisclosures:
         assert len(FL_DISCLOSURE_REQUIREMENTS) > 0
 
     def test_radon_disclosure_required(self):
-        """Radon disclosure is always required in Florida."""
-        disclosures = get_required_disclosures({})
-        assert "radon_gas" in disclosures
+        """Radon disclosure is always required in Florida (residential)."""
+        disclosures = get_required_disclosures(is_residential=True)
+        disclosure_ids = [d.id for d in disclosures]
+        assert "radon_gas" in disclosure_ids
 
     def test_lead_paint_required_pre_1978(self):
         """Lead paint disclosure required for pre-1978 homes."""
-        disclosures = get_required_disclosures({"year_built": 1970})
-        assert "lead_paint" in disclosures
+        disclosures = get_required_disclosures(year_built=1970)
+        disclosure_ids = [d.id for d in disclosures]
+        assert "lead_paint" in disclosure_ids
 
     def test_lead_paint_not_required_post_1978(self):
         """Lead paint disclosure not required for post-1978 homes."""
-        disclosures = get_required_disclosures({"year_built": 1990})
-        assert "lead_paint" not in disclosures
+        disclosures = get_required_disclosures(year_built=1990)
+        disclosure_ids = [d.id for d in disclosures]
+        assert "lead_paint" not in disclosure_ids
 
     def test_hoa_disclosure_required_for_hoa(self):
         """HOA disclosure required when HOA exists."""
-        disclosures = get_required_disclosures({"is_hoa": True})
-        hoa_found = any("hoa" in d.lower() for d in disclosures)
-        assert hoa_found
+        disclosures = get_required_disclosures(is_hoa=True)
+        disclosure_ids = [d.id for d in disclosures]
+        assert "hoa_disclosure" in disclosure_ids
 
     def test_condo_disclosure_required_for_condo(self):
         """Condo disclosure required for condos."""
-        disclosures = get_required_disclosures({"is_condo": True})
-        condo_found = any("condo" in d.lower() for d in disclosures)
-        assert condo_found
+        disclosures = get_required_disclosures(is_condo=True)
+        disclosure_ids = [d.id for d in disclosures]
+        assert "condo_disclosure" in disclosure_ids
 
     def test_get_disclosure_checklist(self):
         """Returns formatted checklist for display."""
@@ -245,9 +247,9 @@ class TestDisclosures:
         checklist = get_disclosure_checklist(transaction_data)
 
         assert len(checklist) > 0
-        assert all("id" in item for item in checklist)
+        assert all("disclosure_id" in item for item in checklist)
         assert all("name" in item for item in checklist)
-        assert all("required" in item for item in checklist)
+        assert all("status" in item for item in checklist)
 
 
 class TestFormServiceFactory:
