@@ -1,20 +1,27 @@
-"""Transaction management endpoints."""
+"""Transaction management endpoints with proper session handling."""
 
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
+import structlog
 
 from services.api.dependencies import (
     CurrentUserDep,
     TransactionServiceDep,
     DeadlineServiceDep,
 )
+from packages.db.session import get_db
+from packages.db.models import ChecklistModel
 
 router = APIRouter()
+logger = structlog.get_logger()
 
 
 # === Request/Response Models ===
@@ -142,6 +149,17 @@ def _extract_party_name(parties: list[dict[str, Any]], role: str) -> str | None:
         if party.get("role") == role:
             return party.get("name")
     return None
+
+
+def _calculate_days_remaining(due_date: date | None) -> int | None:
+    """
+    Calculate days remaining until due date.
+
+    Returns None if due_date is not set (NEW-009 fix).
+    """
+    if due_date is None:
+        return None
+    return (due_date - date.today()).days
 
 
 def transaction_to_response(transaction) -> TransactionResponse:
@@ -291,6 +309,18 @@ async def get_transaction(
             for i in items
         ]
 
+    # Build deadline response with null safety (NEW-009 fix)
+    upcoming_deadline_list = []
+    for d in deadlines[:5]:
+        days_remaining = _calculate_days_remaining(d.due_date)
+        upcoming_deadline_list.append({
+            "id": str(d.id),
+            "name": d.name,
+            "due_date": str(d.due_date) if d.due_date else None,
+            "status": d.status,
+            "days_remaining": days_remaining,
+        })
+
     return TransactionDetailResponse(
         id=transaction.id,
         status=transaction.status,
@@ -308,16 +338,7 @@ async def get_transaction(
         deadlines_count=len(deadlines),
         checklist_completion=checklist_completion,
         checklist_items=checklist_items,
-        upcoming_deadlines=[
-            {
-                "id": str(d.id),
-                "name": d.name,
-                "due_date": str(d.due_date),
-                "status": d.status,
-                "days_remaining": (d.due_date - date.today()).days,
-            }
-            for d in deadlines[:5]
-        ],
+        upcoming_deadlines=upcoming_deadline_list,
     )
 
 
@@ -458,6 +479,12 @@ async def delete_transaction(
             detail="Transaction not found",
         )
 
+    logger.info(
+        "transaction_deleted",
+        transaction_id=str(transaction_id),
+        user_id=str(current_user.id),
+    )
+
 
 # === Checklist Endpoints ===
 
@@ -489,19 +516,17 @@ async def update_checklist_item(
     request: UpdateChecklistItemRequest,
     current_user: CurrentUserDep,
     service: TransactionServiceDep,
+    db: AsyncSession = Depends(get_db),  # Use injected session (NEW-005, NEW-011 fix)
 ) -> ChecklistItemResponse:
     """
     Update a checklist item's status.
 
     Allows marking checklist items as completed, in progress, or blocked.
     Optionally link a document to the checklist item.
-    """
-    from datetime import datetime, timezone
-    from packages.db.session import AsyncSessionLocal
-    from sqlalchemy import select
-    from packages.db.models import ChecklistModel
 
-    # Verify transaction access
+    Uses the request's database session for transactional consistency.
+    """
+    # Verify transaction access through the service layer (NEW-011 fix)
     transaction = await service.get_transaction(
         transaction_id,
         current_user.organization_id,
@@ -529,11 +554,17 @@ async def update_checklist_item(
         if item.get("id") == item_id:
             item_found = True
             # Update the item
+            completed_at = None
+            if request.status == "completed":
+                completed_at = datetime.now(timezone.utc).isoformat()
+            elif request.status != "completed":
+                completed_at = item.get("completed_at")  # Keep existing if status unchanged
+
             items[i] = {
                 **item,
                 "status": request.status,
                 "document_id": str(request.document_id) if request.document_id else item.get("document_id"),
-                "completed_at": datetime.now(timezone.utc).isoformat() if request.status == "completed" else item.get("completed_at"),
+                "completed_at": completed_at,
             }
             updated_item = items[i]
             break
@@ -544,17 +575,25 @@ async def update_checklist_item(
             detail=f"Checklist item '{item_id}' not found",
         )
 
-    # Update the checklist in the database
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(ChecklistModel).where(ChecklistModel.transaction_id == transaction_id)
-        )
-        checklist = result.scalar_one_or_none()
-        if checklist:
-            from sqlalchemy.orm.attributes import flag_modified
-            checklist.items = items
-            flag_modified(checklist, "items")
-            await session.commit()
+    # Update the checklist using the injected session (NEW-005 fix)
+    # This ensures the update is part of the same transaction
+    result = await db.execute(
+        select(ChecklistModel).where(ChecklistModel.transaction_id == transaction_id)
+    )
+    checklist = result.scalar_one_or_none()
+
+    if checklist:
+        checklist.items = items
+        flag_modified(checklist, "items")
+        # Session will be committed by the dependency
+
+    logger.info(
+        "checklist_item_updated",
+        transaction_id=str(transaction_id),
+        item_id=item_id,
+        new_status=request.status,
+        user_id=str(current_user.id),
+    )
 
     return ChecklistItemResponse(
         id=updated_item["id"],

@@ -1,18 +1,22 @@
-"""Document management endpoints."""
+"""Document management endpoints with proper error handling and security."""
 
+import magic
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
+import structlog
 
 from services.api.dependencies import (
     CurrentUserDep,
     DocumentServiceDep,
     StorageDep,
 )
+from packages.core.exceptions import StorageError
 
 router = APIRouter()
+logger = structlog.get_logger()
 
 
 # === Request/Response Models ===
@@ -70,7 +74,78 @@ class UploadUrlResponse(BaseModel):
     expires_in: int
 
 
+# === Constants ===
+
+# Allowed MIME types and their file signatures
+ALLOWED_TYPES = {
+    "application/pdf": {
+        "magic_bytes": [b"%PDF"],
+        "extensions": [".pdf"],
+    },
+    "image/jpeg": {
+        "magic_bytes": [b"\xff\xd8\xff"],
+        "extensions": [".jpg", ".jpeg"],
+    },
+    "image/png": {
+        "magic_bytes": [b"\x89PNG\r\n\x1a\n"],
+        "extensions": [".png"],
+    },
+    "image/tiff": {
+        "magic_bytes": [b"II*\x00", b"MM\x00*"],
+        "extensions": [".tiff", ".tif"],
+    },
+    "image/webp": {
+        "magic_bytes": [b"RIFF"],  # WebP starts with RIFF
+        "extensions": [".webp"],
+    },
+    "image/gif": {
+        "magic_bytes": [b"GIF87a", b"GIF89a"],
+        "extensions": [".gif"],
+    },
+}
+
+ALLOWED_MIME_TYPES = list(ALLOWED_TYPES.keys())
+
+
 # === Helper Functions ===
+
+
+def validate_file_content(file_content: bytes, declared_content_type: str) -> tuple[bool, str]:
+    """
+    Validate that file content matches declared content type using file magic.
+
+    Returns:
+        tuple: (is_valid, detected_mime_type)
+    """
+    try:
+        # Use python-magic to detect actual file type
+        detected_mime = magic.from_buffer(file_content[:2048], mime=True)
+
+        # Check if detected type is allowed
+        if detected_mime not in ALLOWED_MIME_TYPES:
+            return False, detected_mime
+
+        # Check if declared type matches (with some flexibility)
+        # Allow image/jpeg when detected as image/jpeg, etc.
+        if detected_mime == declared_content_type:
+            return True, detected_mime
+
+        # Special cases: some browsers send different MIME types
+        if detected_mime == "image/jpeg" and declared_content_type in ["image/jpg", "image/pjpeg"]:
+            return True, detected_mime
+
+        # If detected is allowed but different from declared, use detected
+        # This prevents type confusion attacks
+        return True, detected_mime
+
+    except Exception as e:
+        logger.warning(
+            "file_magic_detection_failed",
+            error=str(e),
+            declared_type=declared_content_type,
+        )
+        # Fall back to declared type if magic detection fails
+        return declared_content_type in ALLOWED_MIME_TYPES, declared_content_type
 
 
 def document_to_response(document) -> DocumentResponse:
@@ -132,26 +207,37 @@ async def upload_document(
             detail="Filename is required",
         )
 
-    # Validate content type
-    allowed_types = [
-        "application/pdf",
-        "image/jpeg",
-        "image/png",
-        "image/tiff",
-        "image/webp",
-        "image/gif",
-    ]
-    content_type = file.content_type or "application/pdf"
-    if content_type not in allowed_types:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File type not allowed. Allowed types: {', '.join(allowed_types)}",
-        )
-
-    # Read file content
+    # Read file content for validation
     file_content = await file.read()
 
+    if len(file_content) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is empty",
+        )
+
+    # Validate content type using file magic (NEW-013 fix)
+    declared_content_type = file.content_type or "application/pdf"
+    is_valid, detected_content_type = validate_file_content(file_content, declared_content_type)
+
+    if not is_valid:
+        logger.warning(
+            "document_upload_invalid_type",
+            declared_type=declared_content_type,
+            detected_type=detected_content_type,
+            filename=file.filename,
+            user_id=str(current_user.id),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File type not allowed. Detected: {detected_content_type}. Allowed types: PDF, JPEG, PNG, TIFF, WebP, GIF",
+        )
+
+    # Use detected content type for storage
+    content_type = detected_content_type
+
     # Upload to storage
+    storage_path = None
     try:
         storage_path, file_size = await storage.upload_file(
             organization_id=current_user.organization_id,
@@ -160,10 +246,31 @@ async def upload_document(
             file_data=file_content,
             content_type=content_type,
         )
+    except StorageError as e:
+        logger.error(
+            "document_upload_storage_failed",
+            transaction_id=str(transaction_id),
+            filename=file.filename,
+            user_id=str(current_user.id),
+            error=str(e),
+        )
+        # Don't expose internal storage details (NEW-008 fix)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Storage service temporarily unavailable. Please try again.",
+        )
     except Exception as e:
+        logger.error(
+            "document_upload_unexpected_error",
+            transaction_id=str(transaction_id),
+            filename=file.filename,
+            user_id=str(current_user.id),
+            error=str(e),
+            error_type=type(e).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload file: {str(e)}",
+            detail="An unexpected error occurred during upload.",
         )
 
     # Create document record and queue extraction
@@ -178,9 +285,29 @@ async def upload_document(
             file_size=file_size,
             document_type=document_type,
         )
+        logger.info(
+            "document_uploaded",
+            document_id=str(document.id),
+            transaction_id=str(transaction_id),
+            user_id=str(current_user.id),
+            filename=file.filename,
+            content_type=content_type,
+            file_size=file_size,
+        )
     except ValueError as e:
-        # Clean up uploaded file
-        await storage.delete_file(storage_path)
+        # Clean up uploaded file on business logic error
+        try:
+            await storage.delete_file(storage_path)
+            logger.info(
+                "document_upload_cleanup_success",
+                storage_path=storage_path,
+            )
+        except Exception as cleanup_error:
+            logger.error(
+                "document_upload_cleanup_failed",
+                storage_path=storage_path,
+                error=str(cleanup_error),
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
@@ -206,6 +333,13 @@ async def get_upload_url(
     Use this for larger files or when uploading from the client directly.
     After uploading, call POST /documents/confirm to create the document record.
     """
+    # Validate content type
+    if content_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Content type not allowed. Allowed types: {', '.join(ALLOWED_MIME_TYPES)}",
+        )
+
     try:
         upload_url, storage_path = await storage.get_presigned_upload_url(
             organization_id=current_user.organization_id,
@@ -213,10 +347,17 @@ async def get_upload_url(
             filename=filename,
             content_type=content_type,
         )
-    except Exception as e:
+    except StorageError as e:
+        logger.error(
+            "document_presigned_url_failed",
+            transaction_id=str(transaction_id),
+            filename=filename,
+            user_id=str(current_user.id),
+            error=str(e),
+        )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate upload URL: {str(e)}",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Storage service temporarily unavailable.",
         )
 
     return UploadUrlResponse(
@@ -295,10 +436,17 @@ async def download_document(
 
     try:
         url = await storage.get_presigned_download_url(document.storage_path)
-    except Exception as e:
+    except StorageError as e:
+        logger.error(
+            "document_download_url_failed",
+            document_id=str(document_id),
+            storage_path=document.storage_path,
+            user_id=str(current_user.id),
+            error=str(e),
+        )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate download URL: {str(e)}",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Storage service temporarily unavailable.",
         )
 
     return PresignedUrlResponse(url=url, expires_in=3600)
@@ -372,6 +520,13 @@ async def verify_extracted_data(
             detail="Document not found",
         )
 
+    logger.info(
+        "document_verified",
+        document_id=str(document_id),
+        user_id=str(current_user.id),
+        has_corrections=request.corrections is not None,
+    )
+
     return document_to_response(document)
 
 
@@ -398,6 +553,12 @@ async def reprocess_document(
             detail="Document not found",
         )
 
+    logger.info(
+        "document_reprocess_requested",
+        document_id=str(document_id),
+        user_id=str(current_user.id),
+    )
+
     return document_to_response(document)
 
 
@@ -408,7 +569,12 @@ async def delete_document(
     service: DocumentServiceDep,
     storage: StorageDep,
 ) -> None:
-    """Delete a document from a transaction."""
+    """
+    Delete a document from a transaction.
+
+    Deletes both the storage file and the database record.
+    Storage deletion is logged but does not block database deletion.
+    """
     # Get document to get storage path
     document = await service.get_document(document_id, current_user.organization_id)
 
@@ -418,13 +584,43 @@ async def delete_document(
             detail="Document not found",
         )
 
-    # Delete from storage
-    try:
-        await storage.delete_file(document.storage_path)
-    except Exception:
-        pass  # Continue even if storage delete fails
+    storage_path = document.storage_path
+    transaction_id = document.transaction_id
 
-    # Delete record
+    # Delete from storage first (NEW-003, NEW-019 fix - proper logging)
+    storage_deleted = False
+    try:
+        await storage.delete_file(storage_path)
+        storage_deleted = True
+        logger.info(
+            "document_storage_deleted",
+            document_id=str(document_id),
+            storage_path=storage_path,
+            user_id=str(current_user.id),
+        )
+    except StorageError as e:
+        # Log but continue - database record should still be deleted
+        # so user doesn't have a "stuck" document
+        logger.error(
+            "document_storage_delete_failed",
+            document_id=str(document_id),
+            storage_path=storage_path,
+            user_id=str(current_user.id),
+            error=str(e),
+            will_orphan_file=True,
+        )
+    except Exception as e:
+        logger.error(
+            "document_storage_delete_unexpected_error",
+            document_id=str(document_id),
+            storage_path=storage_path,
+            user_id=str(current_user.id),
+            error=str(e),
+            error_type=type(e).__name__,
+            will_orphan_file=True,
+        )
+
+    # Delete database record
     deleted = await service.delete_document(document_id, current_user.organization_id)
 
     if not deleted:
@@ -432,3 +628,13 @@ async def delete_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Document not found",
         )
+
+    # Audit log for document deletion (NEW-021 fix)
+    logger.info(
+        "document_deleted",
+        document_id=str(document_id),
+        transaction_id=str(transaction_id),
+        user_id=str(current_user.id),
+        storage_deleted=storage_deleted,
+        storage_path=storage_path,
+    )
