@@ -1,5 +1,6 @@
 """Contacts router - lightweight CRM endpoints."""
 
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -9,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.db.session import get_db
 from packages.core.services import ContactsService, get_contacts_service, ContactType
-from services.api.routers.auth import get_current_user
+# REM-003: Use standard CurrentUserDep for consistent auth handling
+from services.api.dependencies import CurrentUserDep, DbSessionDep
 
 
 router = APIRouter()
@@ -92,8 +94,8 @@ async def list_contacts(
     contact_type: str | None = Query(None, description="Filter by contact type"),
     limit: int = Query(50, le=100),
     offset: int = Query(0, ge=0),
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> ContactListResponse:
     """
     List contacts with optional search and filtering.
@@ -103,7 +105,7 @@ async def list_contacts(
     contacts_service = get_contacts_service(db)
 
     contacts, total = await contacts_service.search_contacts(
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
         query=query,
         contact_type=contact_type,
         limit=limit,
@@ -121,8 +123,8 @@ async def list_contacts(
 @router.post("", response_model=ContactResponse)
 async def create_contact(
     request: ContactCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> ContactResponse:
     """
     Create a new contact.
@@ -133,7 +135,7 @@ async def create_contact(
     contacts_service = get_contacts_service(db)
 
     contact = await contacts_service.upsert_contact(
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
         email=request.email,
         phone=request.phone,
         full_name=request.full_name,
@@ -147,7 +149,7 @@ async def create_contact(
         for tag in request.tags:
             await contacts_service.add_tag(
                 contact.id,
-                UUID(current_user["organization_id"]),
+                current_user.organization_id,  # REM-003: Access as attribute
                 tag,
             )
 
@@ -160,8 +162,8 @@ async def create_contact(
 async def get_repeat_clients(
     min_transactions: int = Query(2, ge=2),
     limit: int = Query(20, le=50),
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> dict[str, Any]:
     """
     Get contacts with multiple transactions (VIP/repeat clients).
@@ -169,7 +171,7 @@ async def get_repeat_clients(
     contacts_service = get_contacts_service(db)
 
     contacts = await contacts_service.get_repeat_clients(
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
         min_transactions=min_transactions,
         limit=limit,
     )
@@ -184,8 +186,8 @@ async def get_repeat_clients(
 @router.get("/recent")
 async def get_recent_contacts(
     limit: int = Query(10, le=50),
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> dict[str, Any]:
     """
     Get most recently updated/created contacts.
@@ -193,7 +195,7 @@ async def get_recent_contacts(
     contacts_service = get_contacts_service(db)
 
     contacts = await contacts_service.get_recent_contacts(
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
         limit=limit,
     )
 
@@ -206,8 +208,8 @@ async def get_recent_contacts(
 @router.get("/{contact_id}", response_model=ContactResponse)
 async def get_contact(
     contact_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> ContactResponse:
     """
     Get a contact by ID.
@@ -216,7 +218,7 @@ async def get_contact(
 
     contact = await contacts_service.get_contact(
         contact_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
     )
 
     if not contact:
@@ -229,8 +231,8 @@ async def get_contact(
 async def update_contact(
     contact_id: UUID,
     request: ContactUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> ContactResponse:
     """
     Update a contact's information.
@@ -239,7 +241,7 @@ async def update_contact(
 
     contact = await contacts_service.get_contact(
         contact_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
     )
 
     if not contact:
@@ -259,9 +261,7 @@ async def update_contact(
     if request.notes:
         contact.notes = request.notes
 
-    from datetime import datetime
-
-    contact.updated_at = datetime.now()
+    contact.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
     return _contact_to_response(contact)
@@ -270,8 +270,8 @@ async def update_contact(
 @router.get("/{contact_id}/transactions")
 async def get_contact_transactions(
     contact_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> dict[str, Any]:
     """
     Get all transactions involving a contact.
@@ -282,7 +282,7 @@ async def get_contact_transactions(
 
     contact = await contacts_service.get_contact(
         contact_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
     )
 
     if not contact:
@@ -290,7 +290,7 @@ async def get_contact_transactions(
 
     transactions = await contacts_service.get_contact_transactions(
         contact_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
     )
 
     return {
@@ -305,8 +305,8 @@ async def get_contact_transactions(
 async def add_tag(
     contact_id: UUID,
     tag: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> ContactResponse:
     """
     Add a tag to a contact.
@@ -315,7 +315,7 @@ async def add_tag(
 
     contact = await contacts_service.add_tag(
         contact_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
         tag,
     )
 
@@ -330,8 +330,8 @@ async def add_tag(
 async def remove_tag(
     contact_id: UUID,
     tag: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> ContactResponse:
     """
     Remove a tag from a contact.
@@ -340,7 +340,7 @@ async def remove_tag(
 
     contact = await contacts_service.remove_tag(
         contact_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
         tag,
     )
 
@@ -355,8 +355,8 @@ async def remove_tag(
 async def add_note(
     contact_id: UUID,
     note: str = Query(..., description="Note text"),
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep = None,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep = None,  # REM-003: Use typed CurrentUserDep
 ) -> ContactResponse:
     """
     Add a note to a contact.
@@ -365,7 +365,7 @@ async def add_note(
 
     contact = await contacts_service.add_note(
         contact_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
         note,
     )
 
@@ -379,8 +379,8 @@ async def add_note(
 @router.post("/sync-from-transaction/{transaction_id}")
 async def sync_contacts_from_transaction(
     transaction_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> dict[str, Any]:
     """
     Sync contacts from transaction parties.
@@ -392,7 +392,7 @@ async def sync_contacts_from_transaction(
     tx_service = TransactionService(db)
     transaction = await tx_service.get_transaction(
         transaction_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
     )
 
     if not transaction:
@@ -402,7 +402,7 @@ async def sync_contacts_from_transaction(
 
     contacts = await contacts_service.sync_parties_to_contacts(
         transaction_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
         transaction.parties or [],
     )
 

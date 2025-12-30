@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 from uuid import UUID
@@ -12,6 +13,9 @@ from pydantic import BaseModel
 
 from services.api.dependencies import CurrentUserDep
 from packages.core.services.events import get_event_bus, EventTypes
+
+# Configure structured logger for realtime module
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -110,13 +114,36 @@ class ConnectionManager:
         }
 
         # Send to WebSocket connections
+        failed_connections: list[tuple[str, WebSocket]] = []
         for key, connections in self.active_connections.items():
             if key.startswith(f"{org_id}:"):
                 for connection in connections:
                     try:
                         await connection.send_json(message)
-                    except Exception:
-                        pass
+                    except WebSocketDisconnect:
+                        # Client disconnected - mark for cleanup
+                        failed_connections.append((key, connection))
+                        logger.debug(
+                            "websocket_client_disconnected",
+                            extra={"org_id": org_id, "connection_key": key}
+                        )
+                    except Exception as e:
+                        # Log unexpected errors with context
+                        logger.warning(
+                            "websocket_send_failed",
+                            extra={
+                                "org_id": org_id,
+                                "connection_key": key,
+                                "error_type": type(e).__name__,
+                                "error": str(e),
+                            }
+                        )
+                        failed_connections.append((key, connection))
+
+        # Clean up failed connections
+        for key, connection in failed_connections:
+            if key in self.active_connections and connection in self.active_connections[key]:
+                self.active_connections[key].remove(connection)
 
         # Send to SSE queues (now stored as tuples with timestamps)
         for key, queue_list in self.sse_queues.items():
@@ -126,9 +153,27 @@ class ConnectionManager:
                         # Use put_nowait to avoid blocking; queue has maxsize
                         queue.put_nowait(message)
                     except asyncio.QueueFull:
-                        pass  # Skip if queue is full (client not consuming)
-                    except Exception:
-                        pass
+                        # Log when queue is full - client not consuming fast enough (REM-015)
+                        logger.warning(
+                            "sse_queue_full_message_dropped",
+                            extra={
+                                "org_id": org_id,
+                                "connection_key": key,
+                                "event_type": event_type,
+                                "queue_size": queue.qsize(),
+                            }
+                        )
+                    except Exception as e:
+                        # Log unexpected SSE queue errors
+                        logger.error(
+                            "sse_queue_error",
+                            extra={
+                                "org_id": org_id,
+                                "connection_key": key,
+                                "error_type": type(e).__name__,
+                                "error": str(e),
+                            }
+                        )
 
     async def send_to_user(self, org_id: str, user_id: str, event_type: str, data: dict[str, Any]):
         """Send an event to a specific user."""
@@ -141,11 +186,32 @@ class ConnectionManager:
 
         # Send to WebSocket connections
         if key in self.active_connections:
+            failed_connections: list[WebSocket] = []
             for connection in self.active_connections[key]:
                 try:
                     await connection.send_json(message)
-                except Exception:
-                    pass
+                except WebSocketDisconnect:
+                    failed_connections.append(connection)
+                    logger.debug(
+                        "websocket_client_disconnected_user",
+                        extra={"org_id": org_id, "user_id": user_id}
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "websocket_send_to_user_failed",
+                        extra={
+                            "org_id": org_id,
+                            "user_id": user_id,
+                            "error_type": type(e).__name__,
+                            "error": str(e),
+                        }
+                    )
+                    failed_connections.append(connection)
+
+            # Clean up failed connections
+            for connection in failed_connections:
+                if connection in self.active_connections[key]:
+                    self.active_connections[key].remove(connection)
 
         # Send to SSE queues (now stored as tuples with timestamps)
         if key in self.sse_queues:
@@ -153,9 +219,26 @@ class ConnectionManager:
                 try:
                     queue.put_nowait(message)
                 except asyncio.QueueFull:
-                    pass  # Skip if queue is full
-                except Exception:
-                    pass
+                    # Log dropped message for monitoring (REM-015)
+                    logger.warning(
+                        "sse_queue_full_user_message_dropped",
+                        extra={
+                            "org_id": org_id,
+                            "user_id": user_id,
+                            "event_type": event_type,
+                            "queue_size": queue.qsize(),
+                        }
+                    )
+                except Exception as e:
+                    logger.error(
+                        "sse_queue_user_error",
+                        extra={
+                            "org_id": org_id,
+                            "user_id": user_id,
+                            "error_type": type(e).__name__,
+                            "error": str(e),
+                        }
+                    )
 
 
 # Global connection manager
@@ -284,7 +367,7 @@ async def websocket_endpoint(
     }
     ```
     """
-    # Validate token using AuthService
+    # Validate token using AuthService (REM-007: Log all auth failures for security monitoring)
     from packages.core.services.auth import AuthService
     from packages.db.session import get_db_context
 
@@ -294,6 +377,10 @@ async def websocket_endpoint(
             payload = auth_service.decode_token(token)
 
             if not payload:
+                logger.warning(
+                    "websocket_auth_failed_invalid_payload",
+                    extra={"reason": "Token decode returned None"}
+                )
                 await websocket.close(code=4001, reason="Invalid token")
                 return
 
@@ -301,9 +388,24 @@ async def websocket_endpoint(
             org_id = payload.get("org")
 
             if not user_id or not org_id:
+                logger.warning(
+                    "websocket_auth_failed_missing_claims",
+                    extra={
+                        "has_user_id": bool(user_id),
+                        "has_org_id": bool(org_id),
+                    }
+                )
                 await websocket.close(code=4001, reason="Invalid token")
                 return
-    except Exception:
+    except Exception as e:
+        # Log authentication failures for security monitoring (REM-007)
+        logger.warning(
+            "websocket_auth_exception",
+            extra={
+                "error_type": type(e).__name__,
+                "error": str(e),
+            }
+        )
         await websocket.close(code=4001, reason="Invalid token")
         return
 
