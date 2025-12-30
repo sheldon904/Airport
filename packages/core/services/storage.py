@@ -1,7 +1,7 @@
 """Storage service - S3-compatible object storage."""
 
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import BinaryIO
 from uuid import UUID
 
@@ -55,7 +55,7 @@ class StorageService:
     ) -> str:
         """Generate storage key with tenant isolation."""
         # Format: org_id/transaction_id/timestamp_filename
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         safe_filename = filename.replace(" ", "_")
         return f"{organization_id}/{transaction_id}/{timestamp}_{safe_filename}"
 

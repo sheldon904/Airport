@@ -415,11 +415,36 @@ async def delete_transaction(
 
     Only allowed for draft transactions. Active transactions
     should be cancelled instead.
+
+    Requires the user to be the transaction creator or an admin/broker.
     """
+    # First, verify the transaction exists and user has access
+    transaction = await service.get_transaction(
+        transaction_id,
+        current_user.organization_id,
+    )
+
+    if not transaction:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Transaction not found",
+        )
+
+    # Check ownership: must be creator or admin/broker
+    is_creator = transaction.created_by == current_user.id
+    is_admin = current_user.role in ["admin", "broker"]
+
+    if not is_creator and not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to delete this transaction. Only the creator or an admin can delete transactions.",
+        )
+
     try:
         deleted = await service.delete_transaction(
             transaction_id,
             current_user.organization_id,
+            deleted_by=current_user.id,
         )
     except ValueError as e:
         raise HTTPException(
@@ -432,3 +457,109 @@ async def delete_transaction(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Transaction not found",
         )
+
+
+# === Checklist Endpoints ===
+
+
+class UpdateChecklistItemRequest(BaseModel):
+    """Request to update a checklist item status."""
+
+    status: str = Field(..., pattern="^(not_started|in_progress|completed|blocked)$")
+    document_id: UUID | None = None
+
+
+class ChecklistItemResponse(BaseModel):
+    """Response for updated checklist item."""
+
+    id: str
+    name: str
+    status: str
+    document_id: str | None
+    completed_at: str | None
+
+
+@router.patch(
+    "/{transaction_id}/checklist/{item_id}",
+    response_model=ChecklistItemResponse,
+)
+async def update_checklist_item(
+    transaction_id: UUID,
+    item_id: str,
+    request: UpdateChecklistItemRequest,
+    current_user: CurrentUserDep,
+    service: TransactionServiceDep,
+) -> ChecklistItemResponse:
+    """
+    Update a checklist item's status.
+
+    Allows marking checklist items as completed, in progress, or blocked.
+    Optionally link a document to the checklist item.
+    """
+    from datetime import datetime, timezone
+    from packages.db.session import AsyncSessionLocal
+    from sqlalchemy import select
+    from packages.db.models import ChecklistModel
+
+    # Verify transaction access
+    transaction = await service.get_transaction(
+        transaction_id,
+        current_user.organization_id,
+    )
+
+    if not transaction:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Transaction not found",
+        )
+
+    # Get the checklist
+    if not transaction.checklist:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Transaction has no checklist",
+        )
+
+    # Find and update the item
+    items = list(transaction.checklist.items or [])
+    item_found = False
+    updated_item = None
+
+    for i, item in enumerate(items):
+        if item.get("id") == item_id:
+            item_found = True
+            # Update the item
+            items[i] = {
+                **item,
+                "status": request.status,
+                "document_id": str(request.document_id) if request.document_id else item.get("document_id"),
+                "completed_at": datetime.now(timezone.utc).isoformat() if request.status == "completed" else item.get("completed_at"),
+            }
+            updated_item = items[i]
+            break
+
+    if not item_found:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Checklist item '{item_id}' not found",
+        )
+
+    # Update the checklist in the database
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(ChecklistModel).where(ChecklistModel.transaction_id == transaction_id)
+        )
+        checklist = result.scalar_one_or_none()
+        if checklist:
+            from sqlalchemy.orm.attributes import flag_modified
+            checklist.items = items
+            flag_modified(checklist, "items")
+            await session.commit()
+
+    return ChecklistItemResponse(
+        id=updated_item["id"],
+        name=updated_item.get("name", ""),
+        status=updated_item["status"],
+        document_id=updated_item.get("document_id"),
+        completed_at=updated_item.get("completed_at"),
+    )

@@ -1,6 +1,6 @@
 """Authentication service - user auth and JWT management."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -212,7 +212,7 @@ class AuthService:
 
     def _create_access_token(self, user: UserModel) -> str:
         """Create JWT access token."""
-        expires = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
+        expires = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
 
         payload = {
             "sub": str(user.id),
@@ -227,7 +227,7 @@ class AuthService:
 
     def _create_refresh_token(self, user: UserModel) -> str:
         """Create JWT refresh token."""
-        expires = datetime.utcnow() + timedelta(days=settings.refresh_token_expire_days)
+        expires = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
 
         payload = {
             "sub": str(user.id),
@@ -318,7 +318,7 @@ class AuthService:
 
     def create_password_reset_token(self, user: UserModel) -> str:
         """Create a password reset token valid for 1 hour."""
-        expires = datetime.utcnow() + timedelta(hours=1)
+        expires = datetime.now(timezone.utc) + timedelta(hours=1)
 
         payload = {
             "sub": str(user.id),

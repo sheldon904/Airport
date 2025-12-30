@@ -1,6 +1,6 @@
 """User repository."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Sequence
 from uuid import UUID
 
@@ -38,7 +38,7 @@ class UserRepository(BaseRepository[UserModel]):
 
     async def update_last_login(self, user_id: UUID) -> None:
         """Update user's last login timestamp."""
-        await self.update(user_id, last_login_at=datetime.utcnow())
+        await self.update(user_id, last_login_at=datetime.now(timezone.utc))
 
     async def verify_email(self, user_id: UUID) -> UserModel | None:
         """Mark user's email as verified."""

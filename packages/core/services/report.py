@@ -1,6 +1,6 @@
 """Compliance report generation service."""
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
@@ -345,7 +345,7 @@ class ReportService:
 
         return TransactionSummaryReport(
             report_id=str(uuid4()),
-            generated_at=datetime.utcnow(),
+            generated_at=datetime.now(timezone.utc),
             generated_by=user_name,
             transaction_id=str(transaction_id),
             property_address=transaction.property_address,
@@ -418,7 +418,7 @@ class ReportService:
 
         return OrganizationOverviewReport(
             report_id=str(uuid4()),
-            generated_at=datetime.utcnow(),
+            generated_at=datetime.now(timezone.utc),
             organization_id=str(organization_id),
             organization_name=organization_name,
             total_transactions=total,

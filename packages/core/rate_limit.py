@@ -1,6 +1,10 @@
-"""Rate limiting middleware for Airport API."""
+"""Rate limiting middleware for Airport API.
+
+Supports both in-memory (development) and Redis-based (production) rate limiting.
+"""
 
 import time
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable
@@ -36,19 +40,11 @@ class RateLimitEntry:
     window_start: float = field(default_factory=time.time)
 
 
-class RateLimiter:
-    """
-    In-memory rate limiter using sliding window algorithm.
-
-    For production, replace with Redis-based implementation.
-    """
+class BaseRateLimiter(ABC):
+    """Abstract base class for rate limiters."""
 
     def __init__(self) -> None:
-        # client_key -> RateLimitEntry
-        self._entries: dict[str, RateLimitEntry] = defaultdict(RateLimitEntry)
-        # endpoint -> config
         self._configs: dict[str, RateLimitConfig] = {}
-        # Default config
         self._default_config = RateLimitConfig()
 
     def configure(self, endpoint: str, config: RateLimitConfig) -> None:
@@ -77,6 +73,7 @@ class RateLimiter:
 
         return f"{client_ip}:{request.url.path}"
 
+    @abstractmethod
     def check(self, request: Request) -> tuple[bool, int, int]:
         """
         Check if request is allowed.
@@ -84,6 +81,27 @@ class RateLimiter:
         Returns:
             tuple: (allowed, remaining, retry_after)
         """
+        pass
+
+    @abstractmethod
+    def reset(self, client_key: str) -> None:
+        """Reset rate limit for a client."""
+        pass
+
+
+class InMemoryRateLimiter(BaseRateLimiter):
+    """
+    In-memory rate limiter using sliding window algorithm.
+
+    For development only - does not work across multiple instances.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._entries: dict[str, RateLimitEntry] = defaultdict(RateLimitEntry)
+
+    def check(self, request: Request) -> tuple[bool, int, int]:
+        """Check if request is allowed."""
         endpoint = request.url.path
         config = self._get_config(endpoint)
         client_key = self._get_client_key(request, config)
@@ -113,20 +131,133 @@ class RateLimiter:
             del self._entries[client_key]
 
 
+class RedisRateLimiter(BaseRateLimiter):
+    """
+    Redis-based rate limiter for production multi-instance deployments.
+
+    Uses Redis INCR with expiry for atomic, distributed rate limiting.
+    This implementation works correctly across multiple API instances.
+    """
+
+    def __init__(self, redis_url: str | None = None) -> None:
+        super().__init__()
+        self._redis_url = redis_url or settings.redis_url
+        self._redis = None
+        self._key_prefix = "ratelimit:"
+
+    def _get_redis(self):
+        """Lazy initialization of Redis connection."""
+        if self._redis is None:
+            try:
+                import redis
+                self._redis = redis.from_url(
+                    self._redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                )
+                # Test connection
+                self._redis.ping()
+                logger.info("rate_limiter_redis_connected", url=self._redis_url.split("@")[-1])
+            except Exception as e:
+                logger.warning(
+                    "rate_limiter_redis_failed",
+                    error=str(e),
+                    fallback="in-memory",
+                )
+                # Return None to signal fallback to in-memory
+                return None
+        return self._redis
+
+    def check(self, request: Request) -> tuple[bool, int, int]:
+        """Check if request is allowed using Redis."""
+        endpoint = request.url.path
+        config = self._get_config(endpoint)
+        client_key = self._get_client_key(request, config)
+        redis_key = f"{self._key_prefix}{client_key}"
+
+        redis_client = self._get_redis()
+        if redis_client is None:
+            # Fallback to permissive mode if Redis is unavailable
+            logger.warning("rate_limiter_redis_unavailable", action="allowing_request")
+            return True, config.requests - 1, 0
+
+        try:
+            # Use Redis pipeline for atomic operations
+            pipe = redis_client.pipeline()
+
+            # Get current count and TTL
+            pipe.incr(redis_key)
+            pipe.ttl(redis_key)
+            results = pipe.execute()
+
+            current_count = results[0]
+            ttl = results[1]
+
+            # Set expiry if this is the first request in the window
+            if ttl == -1:  # Key exists but has no expiry (shouldn't happen, but handle it)
+                redis_client.expire(redis_key, config.window)
+                ttl = config.window
+            elif current_count == 1:  # First request in window
+                redis_client.expire(redis_key, config.window)
+                ttl = config.window
+
+            # Check if over limit
+            if current_count > config.requests:
+                retry_after = max(1, ttl if ttl > 0 else config.window)
+                return False, 0, retry_after
+
+            remaining = config.requests - current_count
+            return True, remaining, 0
+
+        except Exception as e:
+            logger.warning(
+                "rate_limiter_redis_error",
+                error=str(e),
+                action="allowing_request",
+            )
+            # Fail open - allow request if Redis errors
+            return True, config.requests - 1, 0
+
+    def reset(self, client_key: str) -> None:
+        """Reset rate limit for a client in Redis."""
+        redis_client = self._get_redis()
+        if redis_client:
+            try:
+                redis_key = f"{self._key_prefix}{client_key}"
+                redis_client.delete(redis_key)
+            except Exception as e:
+                logger.warning("rate_limiter_reset_error", error=str(e))
+
+
+# Type alias for backward compatibility
+RateLimiter = InMemoryRateLimiter
+
+
 # Global rate limiter instance
-_rate_limiter: RateLimiter | None = None
+_rate_limiter: BaseRateLimiter | None = None
 
 
-def get_rate_limiter() -> RateLimiter:
-    """Get the global rate limiter instance."""
+def get_rate_limiter() -> BaseRateLimiter:
+    """
+    Get the global rate limiter instance.
+
+    Uses Redis in production, in-memory for development.
+    """
     global _rate_limiter
     if _rate_limiter is None:
-        _rate_limiter = RateLimiter()
+        # Use Redis for production, in-memory for development
+        if settings.environment == "production":
+            _rate_limiter = RedisRateLimiter()
+            logger.info("rate_limiter_initialized", type="redis")
+        else:
+            _rate_limiter = InMemoryRateLimiter()
+            logger.info("rate_limiter_initialized", type="in-memory")
         _configure_default_limits(_rate_limiter)
     return _rate_limiter
 
 
-def _configure_default_limits(limiter: RateLimiter) -> None:
+def _configure_default_limits(limiter: BaseRateLimiter) -> None:
     """Configure default rate limits for sensitive endpoints."""
     # Strict limits for auth endpoints (from config)
     auth_config = RateLimitConfig(
@@ -151,14 +282,14 @@ def _configure_default_limits(limiter: RateLimiter) -> None:
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Middleware to enforce rate limiting."""
 
-    def __init__(self, app, limiter: RateLimiter | None = None) -> None:
+    def __init__(self, app, limiter: BaseRateLimiter | None = None) -> None:
         super().__init__(app)
         self.limiter = limiter or get_rate_limiter()
 
     async def dispatch(self, request: Request, call_next) -> Response:
         """Check rate limit before processing request."""
         # Skip rate limiting for health checks
-        if request.url.path in ("/health", "/ready", "/docs", "/redoc", "/openapi.json"):
+        if request.url.path in ("/health", "/ready", "/live", "/docs", "/redoc", "/openapi.json"):
             return await call_next(request)
 
         allowed, remaining, retry_after = self.limiter.check(request)

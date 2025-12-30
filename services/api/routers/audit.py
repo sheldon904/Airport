@@ -4,7 +4,7 @@ Provides access to audit trail data for compliance and monitoring.
 Supports search, filtering, and export functionality.
 """
 
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Annotated
 from uuid import UUID
 import csv
@@ -182,7 +182,7 @@ async def get_audit_summary(
     """
     from datetime import timedelta
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     today_start = datetime.combine(now.date(), datetime.min.time())
     week_start = today_start - timedelta(days=7)
 
@@ -372,7 +372,7 @@ async def export_audit_logs(
             ])
 
         output.seek(0)
-        filename = f"audit_logs_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        filename = f"audit_logs_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
 
         return StreamingResponse(
             iter([output.getvalue()]),
@@ -400,7 +400,7 @@ async def export_audit_logs(
             for log in logs
         ]
 
-        filename = f"audit_logs_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+        filename = f"audit_logs_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
 
         return StreamingResponse(
             iter([json.dumps(data, indent=2)]),

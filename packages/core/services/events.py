@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine
 from uuid import UUID
 
@@ -52,7 +52,7 @@ class EventBus:
             "payload": payload,
             "transaction_id": str(transaction_id) if transaction_id else None,
             "agent_name": agent_name,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
         # Store in history

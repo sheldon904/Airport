@@ -14,7 +14,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import Link from 'next/link';
-import { formatCurrency, formatDate, getStatusColor, formatAddress } from '@/lib/utils';
+import { formatCurrency, formatDate, getStatusColor, formatAddress, isOverdue } from '@/lib/utils';
 
 function StatCard({
   title,
@@ -301,7 +301,7 @@ export default function DashboardPage() {
                     transaction={formatAddress(
                       deadline.transaction?.property_address || {}
                     )}
-                    isOverdue={new Date(deadline.due_date) < new Date()}
+                    isOverdue={isOverdue(deadline.due_date)}
                   />
                 ))
               ) : (
