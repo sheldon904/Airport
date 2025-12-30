@@ -73,7 +73,7 @@ class TestDocumentExtractAgent:
         """Test agent has correct name and version."""
         agent = DocumentExtractAgent()
         assert agent.name == "document_extract"
-        assert agent.version == "0.2.0"
+        assert agent.version == "0.3.0"
 
     @pytest.mark.asyncio
     async def test_extract_text_from_pdf(self):
@@ -279,7 +279,7 @@ class TestChecklistAgent:
         assert len(result.output.items) > 0
 
         # Check for common required documents
-        item_names = [item["name"].lower() for item in result.output.items]
+        item_names = [item.name.lower() for item in result.output.items]
         assert any("contract" in name for name in item_names)
 
     @pytest.mark.asyncio

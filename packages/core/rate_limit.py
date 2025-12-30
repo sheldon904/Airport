@@ -46,6 +46,52 @@ class RateLimitEntry:
     window_start: float = field(default_factory=time.time)
 
 
+class ExponentialBackoff:
+    """
+    Exponential backoff with jitter for polling.
+
+    Starts at min_delay, doubles on each empty poll (up to max_delay),
+    and resets to min_delay when a job is processed.
+    """
+
+    def __init__(
+        self,
+        min_delay: float = 0.5,
+        max_delay: float = 30.0,
+        multiplier: float = 2.0,
+        jitter: float = 0.1,
+    ) -> None:
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+        self.multiplier = multiplier
+        self.jitter = jitter
+        self._current_delay = min_delay
+
+    def reset(self) -> None:
+        """Reset delay to minimum after processing a job."""
+        self._current_delay = self.min_delay
+
+    def increase(self) -> None:
+        """Increase delay after an empty poll."""
+        self._current_delay = min(
+            self._current_delay * self.multiplier,
+            self.max_delay,
+        )
+
+    async def wait(self) -> None:
+        """Wait for the current delay with jitter."""
+        import asyncio
+        import random
+
+        jitter_amount = self._current_delay * self.jitter * random.random()
+        await asyncio.sleep(self._current_delay + jitter_amount)
+
+    @property
+    def current_delay(self) -> float:
+        """Current delay in seconds."""
+        return self._current_delay
+
+
 def _validate_ip(ip_string: str) -> str | None:
     """
     Validate and normalize an IP address string.

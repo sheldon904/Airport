@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timedelta
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
-import jwt
+from jose import jwt
 
 from packages.core.services.portal import (
     PortalService,
