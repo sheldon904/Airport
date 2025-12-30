@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-import jwt
+from jose import jwt, JWTError, ExpiredSignatureError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -110,9 +110,9 @@ class PortalService:
 
             return payload
 
-        except jwt.ExpiredSignatureError:
+        except ExpiredSignatureError:
             raise AuthenticationError("Portal access token has expired")
-        except jwt.InvalidTokenError as e:
+        except JWTError as e:
             raise AuthenticationError(f"Invalid portal token: {str(e)}")
 
     async def get_portal_data(
