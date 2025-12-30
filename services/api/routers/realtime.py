@@ -237,17 +237,25 @@ async def websocket_endpoint(
     }
     ```
     """
-    # Validate token (simplified - should use proper JWT validation)
-    from packages.core.services.auth import verify_token, get_user_from_token
+    # Validate token using AuthService
+    from packages.core.services.auth import AuthService
+    from packages.db.session import get_db_context
 
     try:
-        payload = verify_token(token)
-        user_id = payload.get("sub")
-        org_id = payload.get("org")
+        async with get_db_context() as db:
+            auth_service = AuthService(db)
+            payload = auth_service.decode_token(token)
 
-        if not user_id or not org_id:
-            await websocket.close(code=4001, reason="Invalid token")
-            return
+            if not payload:
+                await websocket.close(code=4001, reason="Invalid token")
+                return
+
+            user_id = payload.get("sub")
+            org_id = payload.get("org")
+
+            if not user_id or not org_id:
+                await websocket.close(code=4001, reason="Invalid token")
+                return
     except Exception:
         await websocket.close(code=4001, reason="Invalid token")
         return
@@ -422,7 +430,7 @@ def setup_event_bus_integration():
 
         event_type = event.get("event_type")
 
-        if event_type in [EventTypes.DEADLINE_APPROACHING, EventTypes.DEADLINE_URGENT]:
+        if event_type in [EventTypes.DEADLINE_APPROACHING, EventTypes.DEADLINE_URGENT, EventTypes.DEADLINE_OVERDUE]:
             await notify_deadline_alert(
                 UUID(org_id),
                 UUID(payload.get("transaction_id")),
