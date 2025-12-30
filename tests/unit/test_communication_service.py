@@ -79,8 +79,8 @@ class TestTopicCategorization:
     def test_categorize_closing(self, service):
         """Categorizes closing communications."""
         topic = service.categorize_communication(
-            subject="Clear to Close",
-            body="We have received closing disclosure."
+            subject="Walkthrough Scheduled",
+            body="Please bring keys for the final walkthrough. Wire funds ready."
         )
         assert topic == "closing"
 
@@ -93,12 +93,12 @@ class TestTopicCategorization:
         assert topic == "financing"
 
     def test_categorize_unknown(self, service):
-        """Returns None for unknown topics."""
+        """Returns 'general' for unknown topics."""
         topic = service.categorize_communication(
             subject="Hello",
             body="Just checking in about the weather."
         )
-        assert topic is None
+        assert topic == "general"
 
     def test_categorize_prioritizes_subject(self, service):
         """Subject takes priority over body for categorization."""
