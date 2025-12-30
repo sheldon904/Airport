@@ -49,6 +49,13 @@ class TransactionService:
         Creates the transaction in 'draft' status and initializes
         a Florida compliance checklist based on property characteristics.
         """
+        # Ensure all parties have unique IDs
+        parties_with_ids = []
+        for party in (parties or []):
+            if not party.get("id"):
+                party = {**party, "id": str(uuid4())}
+            parties_with_ids.append(party)
+
         # Create transaction
         transaction = await self.transaction_repo.create(
             id=uuid4(),
@@ -61,7 +68,7 @@ class TransactionService:
             closing_date=closing_date,
             status=TransactionStatus.DRAFT,
             notes=notes,
-            parties=parties or [],
+            parties=parties_with_ids,
         )
 
         # Initialize FL checklist
@@ -272,8 +279,16 @@ class TransactionService:
         self,
         transaction_id: UUID,
         organization_id: UUID,
+        deleted_by: UUID | None = None,
     ) -> bool:
-        """Delete a draft transaction."""
+        """
+        Delete a draft transaction.
+
+        Args:
+            transaction_id: ID of the transaction to delete
+            organization_id: Organization ID for access control
+            deleted_by: ID of the user performing the deletion (for audit trail)
+        """
         transaction = await self.get_transaction(transaction_id, organization_id)
         if not transaction:
             return False
@@ -282,6 +297,9 @@ class TransactionService:
         if transaction.status != TransactionStatus.DRAFT:
             raise ValueError("Can only delete draft transactions")
 
+        # Use soft delete if available and deleted_by provided
+        if hasattr(self.transaction_repo, 'soft_delete') and deleted_by:
+            return await self.transaction_repo.soft_delete(transaction_id, deleted_by)
         return await self.transaction_repo.delete(transaction_id)
 
     async def get_dashboard_summary(

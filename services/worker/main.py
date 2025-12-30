@@ -2,7 +2,7 @@
 
 import asyncio
 import signal
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -234,7 +234,7 @@ class Worker:
             transaction_id=transaction_id,
             organization_id=organization_id,
             triggered_by="worker",
-            triggered_at=datetime.utcnow(),
+            triggered_at=datetime.now(timezone.utc),
         )
 
         # Create input
@@ -317,7 +317,7 @@ class Worker:
             transaction_id=transaction_id,
             organization_id=organization_id,
             triggered_by="worker",
-            triggered_at=datetime.utcnow(),
+            triggered_at=datetime.now(timezone.utc),
         )
 
         input_data = DeadlineInput(
@@ -409,7 +409,7 @@ class Worker:
                         transaction_id=UUID(transaction_id),
                         organization_id=UUID(organization_id),
                         triggered_by="worker",
-                        triggered_at=datetime.utcnow(),
+                        triggered_at=datetime.now(timezone.utc),
                     )
 
                     await self.notification_agent.send_deadline_reminder(
@@ -428,7 +428,7 @@ class Worker:
             # Update last_reminder_sent on deadline
             await deadline_repo.update(
                 deadline.id,
-                last_reminder_sent=datetime.utcnow(),
+                last_reminder_sent=datetime.now(timezone.utc),
             )
 
             return {

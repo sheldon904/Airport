@@ -1,6 +1,6 @@
 """Document repository."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Sequence
 from uuid import UUID
 
@@ -99,7 +99,7 @@ class DocumentRepository(BaseRepository[DocumentModel]):
         return await self.update(
             document_id,
             status="verified",
-            verified_at=datetime.utcnow(),
+            verified_at=datetime.now(timezone.utc),
             verified_by=verified_by,
         )
 

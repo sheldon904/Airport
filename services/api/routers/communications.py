@@ -1,6 +1,6 @@
 """Communication management and email sending endpoints."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -347,7 +347,7 @@ async def draft_email(
         )
 
     # Generate draft ID
-    draft_id = f"draft-{transaction.id}-{datetime.utcnow().timestamp()}"
+    draft_id = f"draft-{transaction.id}-{datetime.now(timezone.utc).timestamp()}"
 
     return DraftEmailResponse(
         draft_id=draft_id,
@@ -416,7 +416,7 @@ async def send_email(
 
         return SendEmailResponse(
             success=success,
-            message_id=f"msg-{datetime.utcnow().timestamp()}",
+            message_id=f"msg-{datetime.now(timezone.utc).timestamp()}",
             communication_id=communication_id,
         )
 

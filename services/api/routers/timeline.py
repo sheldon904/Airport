@@ -1,6 +1,6 @@
 """Unified timeline and composite endpoints for transactions."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -548,7 +548,7 @@ async def update_checklist_item(
             found = True
             item["status"] = request.status
             if request.status == "completed":
-                item["completed_at"] = datetime.utcnow().isoformat()
+                item["completed_at"] = datetime.now(timezone.utc).isoformat()
                 item["completed_by"] = str(current_user.id)
             elif request.status == "not_started":
                 item["completed_at"] = None

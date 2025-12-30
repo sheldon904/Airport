@@ -1,7 +1,7 @@
 """Health check endpoints."""
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, status
@@ -156,7 +156,7 @@ async def health_check() -> HealthStatus:
     """
     return HealthStatus(
         status="healthy",
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         environment=settings.environment,
     )
 
@@ -214,7 +214,7 @@ async def readiness_check() -> JSONResponse:
 
     response = ReadinessStatus(
         status=overall_status,
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         dependencies=dependencies,
     )
 

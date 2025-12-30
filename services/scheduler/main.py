@@ -10,7 +10,7 @@ Can be run as a separate process or integrated into the worker with asyncio.
 
 import asyncio
 import signal
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import structlog
@@ -70,7 +70,7 @@ class DeadlineScheduler:
             try:
                 await asyncio.sleep(min(self.reminder_interval, 60))
 
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
 
                 # Check if it's time for status updates (hourly)
                 if (now - self._last_status_update).total_seconds() >= self.check_interval:
@@ -97,8 +97,8 @@ class DeadlineScheduler:
         """Run all checks immediately."""
         await self._update_deadline_statuses()
         await self._enqueue_reminders()
-        self._last_status_update = datetime.utcnow()
-        self._last_reminder_check = datetime.utcnow()
+        self._last_status_update = datetime.now(timezone.utc)
+        self._last_reminder_check = datetime.now(timezone.utc)
 
     async def _update_deadline_statuses(self) -> None:
         """Update status of all deadlines based on current date."""
@@ -219,7 +219,7 @@ class DailyDigestScheduler:
 
         while self.running:
             try:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 today = now.date()
 
                 # Check if we should run today
@@ -252,7 +252,7 @@ class DailyDigestScheduler:
                     job_type="daily_digest",
                     payload={
                         "date": str(date.today()),
-                        "triggered_at": datetime.utcnow().isoformat(),
+                        "triggered_at": datetime.now(timezone.utc).isoformat(),
                     },
                 )
                 await session.commit()
