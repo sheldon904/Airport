@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import axios, { AxiosInstance, AxiosError, AxiosRequestConfig } from 'axios';
 import Cookies from 'js-cookie';
 import type {
   TokenResponse,
@@ -20,8 +20,57 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
+// Cookie configuration with security flags
+const COOKIE_OPTIONS: Cookies.CookieAttributes = {
+  // Note: httpOnly can only be set by the server, not JavaScript
+  // For production, tokens should be set via Set-Cookie headers from the backend
+  secure: process.env.NODE_ENV === 'production', // Only send over HTTPS in production
+  sameSite: 'strict', // Prevent CSRF attacks
+  path: '/',
+};
+
+// API Error interface for proper typing (NEW-018 fix)
+interface ApiError {
+  response?: {
+    status: number;
+    data?: {
+      detail?: string;
+      message?: string;
+    };
+  };
+  message: string;
+}
+
+// Type guard for API errors
+function isApiError(error: unknown): error is ApiError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error
+  );
+}
+
+// Extract error message from API error
+export function getErrorMessage(error: unknown): string {
+  if (isApiError(error)) {
+    return (
+      error.response?.data?.detail ||
+      error.response?.data?.message ||
+      error.message ||
+      'An unexpected error occurred'
+    );
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return 'An unexpected error occurred';
+}
+
 class ApiClient {
   private client: AxiosInstance;
+  // Store tokens in memory for added security (reduces exposure window)
+  private accessToken: string | null = null;
+  private refreshToken: string | null = null;
 
   constructor() {
     this.client = axios.create({
@@ -29,11 +78,18 @@ class ApiClient {
       headers: {
         'Content-Type': 'application/json',
       },
+      // Include CSRF token if available
+      xsrfCookieName: 'csrf_token',
+      xsrfHeaderName: 'X-CSRF-Token',
     });
+
+    // Initialize tokens from cookies on startup
+    this.accessToken = Cookies.get('access_token') || null;
+    this.refreshToken = Cookies.get('refresh_token') || null;
 
     // Add auth token to requests
     this.client.interceptors.request.use((config) => {
-      const token = Cookies.get('access_token');
+      const token = this.accessToken || Cookies.get('access_token');
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
@@ -44,25 +100,31 @@ class ApiClient {
     this.client.interceptors.response.use(
       (response) => response,
       async (error: AxiosError) => {
-        const originalRequest = error.config as any;
+        const originalRequest = error.config as AxiosRequestConfig & { _retry?: boolean };
 
-        if (error.response?.status === 401 && !originalRequest._retry) {
+        if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
           originalRequest._retry = true;
 
-          const refreshToken = Cookies.get('refresh_token');
-          if (refreshToken) {
+          const refresh = this.refreshToken || Cookies.get('refresh_token');
+          if (refresh) {
             try {
-              const response = await this.refreshTokens(refreshToken);
+              const response = await this.refreshTokens(refresh);
               this.setTokens(response);
-              originalRequest.headers.Authorization = `Bearer ${response.access_token}`;
+              if (originalRequest.headers) {
+                originalRequest.headers.Authorization = `Bearer ${response.access_token}`;
+              }
               return this.client(originalRequest);
             } catch {
               this.clearTokens();
-              window.location.href = '/auth/login';
+              if (typeof window !== 'undefined') {
+                window.location.href = '/auth/login';
+              }
             }
           } else {
             this.clearTokens();
-            window.location.href = '/auth/login';
+            if (typeof window !== 'undefined') {
+              window.location.href = '/auth/login';
+            }
           }
         }
 
@@ -71,19 +133,40 @@ class ApiClient {
     );
   }
 
-  // Token management
+  // Token management with security flags (NEW-004 fix)
   setTokens(tokens: TokenResponse) {
-    Cookies.set('access_token', tokens.access_token, { expires: 1 });
-    Cookies.set('refresh_token', tokens.refresh_token, { expires: 7 });
+    // Store in memory first (more secure)
+    this.accessToken = tokens.access_token;
+    this.refreshToken = tokens.refresh_token;
+
+    // Also store in cookies for persistence across page loads
+    // Using secure flags to minimize exposure
+    Cookies.set('access_token', tokens.access_token, {
+      ...COOKIE_OPTIONS,
+      expires: 1, // 1 day
+    });
+    Cookies.set('refresh_token', tokens.refresh_token, {
+      ...COOKIE_OPTIONS,
+      expires: 7, // 7 days
+    });
   }
 
   clearTokens() {
-    Cookies.remove('access_token');
-    Cookies.remove('refresh_token');
+    // Clear memory
+    this.accessToken = null;
+    this.refreshToken = null;
+
+    // Clear cookies
+    Cookies.remove('access_token', { path: '/' });
+    Cookies.remove('refresh_token', { path: '/' });
   }
 
-  getAccessToken(): string | undefined {
-    return Cookies.get('access_token');
+  getAccessToken(): string | null {
+    return this.accessToken || Cookies.get('access_token') || null;
+  }
+
+  isAuthenticated(): boolean {
+    return this.getAccessToken() !== null;
   }
 
   // Auth endpoints
@@ -126,6 +209,17 @@ class ApiClient {
     });
   }
 
+  async requestPasswordReset(email: string): Promise<void> {
+    await this.client.post('/api/v1/auth/forgot-password', { email });
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    await this.client.post('/api/v1/auth/reset-password', {
+      token,
+      new_password: newPassword,
+    });
+  }
+
   // Dashboard
   async getDashboard(): Promise<DashboardData> {
     const response = await this.client.get('/api/v1/transactions/dashboard');
@@ -138,7 +232,7 @@ class ApiClient {
     pageSize = 20,
     status?: string
   ): Promise<TransactionListResponse> {
-    const params: Record<string, any> = { page, page_size: pageSize };
+    const params: Record<string, string | number> = { page, page_size: pageSize };
     if (status) params.status = status;
     const response = await this.client.get('/api/v1/transactions', { params });
     return response.data;
@@ -192,7 +286,7 @@ class ApiClient {
     documentType?: string,
     status?: string
   ): Promise<Document[]> {
-    const params: Record<string, any> = {};
+    const params: Record<string, string> = {};
     if (documentType) params.document_type = documentType;
     if (status) params.status_filter = status;
     const response = await this.client.get(
@@ -240,7 +334,7 @@ class ApiClient {
 
   async verifyDocument(
     id: string,
-    corrections?: Record<string, any>
+    corrections?: Record<string, unknown>
   ): Promise<Document> {
     const response = await this.client.post(`/api/v1/documents/${id}/verify`, {
       corrections,
