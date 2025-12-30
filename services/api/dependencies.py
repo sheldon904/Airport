@@ -30,6 +30,11 @@ class CurrentUser(BaseModel):
     role: str
     full_name: str
 
+    @property
+    def name(self) -> str:
+        """Alias for full_name for convenience."""
+        return self.full_name
+
     @classmethod
     def from_model(cls, user: UserModel) -> "CurrentUser":
         return cls(
