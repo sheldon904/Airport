@@ -1,10 +1,12 @@
 """Portal router - external party portal access endpoints."""
 
-from datetime import datetime, timedelta
+import html
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
@@ -12,10 +14,56 @@ from packages.db.session import get_db
 from packages.core.services import PortalService, get_portal_service
 from packages.core.services.email import get_email_service
 from packages.core.exceptions import AuthenticationError, NotFoundError
+from packages.core.config import settings
 from services.api.dependencies import CurrentUserDep
 
 
 router = APIRouter()
+
+
+# === Input Sanitization ===
+
+
+def sanitize_text(text: str | None, max_length: int = 500) -> str:
+    """
+    Sanitize user input to prevent email injection and XSS.
+
+    - HTML escapes special characters
+    - Removes control characters
+    - Truncates to max length
+    - Strips leading/trailing whitespace
+    """
+    if not text:
+        return ""
+
+    # Remove control characters (except newlines and tabs)
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+    # HTML escape to prevent any potential rendering issues
+    text = html.escape(text, quote=True)
+
+    # Replace potential email header injection patterns
+    text = re.sub(r'\r?\n', ' ', text)  # Replace newlines with spaces
+    text = re.sub(r'(?i)(content-type|bcc|cc|to|from|subject):', '[REMOVED]:', text)
+
+    # Truncate and strip
+    text = text[:max_length].strip()
+
+    return text
+
+
+def sanitize_name(name: str | None) -> str:
+    """Sanitize a person's name."""
+    if not name:
+        return "Valued Party"
+    return sanitize_text(name, max_length=100)
+
+
+def sanitize_message(message: str | None) -> str:
+    """Sanitize a custom message."""
+    if not message:
+        return ""
+    return sanitize_text(message, max_length=1000)
 
 
 # === Request/Response Models ===
@@ -180,12 +228,10 @@ async def generate_portal_token(
     )
 
     # Calculate expiry
-    expires_at = datetime.now() + timedelta(hours=request.expires_hours)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=request.expires_hours)
 
-    # Build portal URL
-    from packages.core.config import settings
-
-    base_url = getattr(settings, "portal_base_url", "https://portal.airporttc.com")
+    # Build portal URL using configured base URL
+    base_url = settings.portal_base_url
     portal_url = f"{base_url}/view?token={token}"
 
     return GenerateTokenResponse(
@@ -232,28 +278,32 @@ async def send_portal_invite(
     )
 
     # Calculate expiry
-    expires_at = datetime.now() + timedelta(hours=request.expires_hours)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=request.expires_hours)
 
-    # Build portal URL
-    from packages.core.config import settings
-
-    base_url = getattr(settings, "portal_base_url", "https://portal.airporttc.com")
+    # Build portal URL using configured base URL
+    base_url = settings.portal_base_url
     portal_url = f"{base_url}/view?token={token}"
 
-    # Format property address
+    # Format property address (sanitize for safety)
     prop_addr = transaction.property_address or {}
-    property_address = f"{prop_addr.get('street', '')}, {prop_addr.get('city', '')}"
+    property_address = sanitize_text(
+        f"{prop_addr.get('street', '')}, {prop_addr.get('city', '')}",
+        max_length=200
+    )
 
     # Format role for display
     role_display = request.party_role.replace("_", " ").title()
 
-    # Prepare email
-    custom_msg = request.custom_message or ""
+    # Prepare email with sanitized inputs
+    custom_msg = sanitize_message(request.custom_message)
     if custom_msg:
         custom_msg = f"\nNote from coordinator:\n{custom_msg}\n"
 
+    # Sanitize party name to prevent injection
+    safe_party_name = sanitize_name(request.party_name)
+
     email_body = PORTAL_INVITE_TEMPLATE.format(
-        party_name=request.party_name,
+        party_name=safe_party_name,
         property_address=property_address,
         party_role=role_display,
         custom_message=custom_msg,
@@ -317,12 +367,14 @@ async def send_bulk_invites(
     failed = 0
     skipped = 0
 
-    # Format property address
+    # Format property address (sanitize for safety)
     prop_addr = transaction.property_address or {}
-    property_address = f"{prop_addr.get('street', '')}, {prop_addr.get('city', '')}"
+    property_address = sanitize_text(
+        f"{prop_addr.get('street', '')}, {prop_addr.get('city', '')}",
+        max_length=200
+    )
 
-    from packages.core.config import settings
-    base_url = getattr(settings, "portal_base_url", "https://portal.airporttc.com")
+    base_url = settings.portal_base_url
 
     for party in parties:
         role = party.get("role", "")
@@ -359,23 +411,26 @@ async def send_bulk_invites(
                 party_role=role,
                 expires_hours=72,
             )
-            expires_at = datetime.now() + timedelta(hours=72)
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=72)
             portal_url = f"{base_url}/view?token={token}"
 
-            # Format email
+            # Format email with sanitized inputs
             role_display = role.replace("_", " ").title()
-            custom_msg = request.custom_message or ""
+            custom_msg = sanitize_message(request.custom_message)
             if custom_msg:
                 custom_msg = f"\nNote from coordinator:\n{custom_msg}\n"
 
+            # Sanitize party name
+            safe_party_name = sanitize_name(name)
+
             email_body = PORTAL_INVITE_TEMPLATE.format(
-                party_name=name or "Valued Party",
+                party_name=safe_party_name,
                 property_address=property_address,
                 party_role=role_display,
                 custom_message=custom_msg,
                 portal_url=portal_url,
                 expires_date=expires_at.strftime("%B %d, %Y at %I:%M %p"),
-                sender_name=current_user.name or "Transaction Coordinator",
+                sender_name=sanitize_name(current_user.name) or "Transaction Coordinator",
                 company_name="Airport TC",
             )
 

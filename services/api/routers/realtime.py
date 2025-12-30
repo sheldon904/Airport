@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 from uuid import UUID
 
@@ -25,8 +25,10 @@ class ConnectionManager:
     def __init__(self):
         # WebSocket connections by user/org
         self.active_connections: dict[str, list[WebSocket]] = {}
-        # SSE subscriptions by user/org
-        self.sse_queues: dict[str, list[asyncio.Queue]] = {}
+        # SSE subscriptions by user/org with timestamps
+        self.sse_queues: dict[str, list[tuple[asyncio.Queue, float]]] = {}
+        # Maximum age for SSE queues (2 hours) - cleanup stale connections
+        self._max_queue_age = 7200
 
     async def connect_ws(self, websocket: WebSocket, user_id: str, org_id: str):
         """Accept a WebSocket connection."""
@@ -42,29 +44,69 @@ class ConnectionManager:
         if key in self.active_connections:
             if websocket in self.active_connections[key]:
                 self.active_connections[key].remove(websocket)
+            # Clean up empty lists
+            if not self.active_connections[key]:
+                del self.active_connections[key]
 
     def create_sse_queue(self, user_id: str, org_id: str) -> asyncio.Queue:
         """Create an SSE event queue for a user."""
+        import time
         key = f"{org_id}:{user_id}"
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)  # Limit queue size to prevent memory issues
         if key not in self.sse_queues:
             self.sse_queues[key] = []
-        self.sse_queues[key].append(queue)
+        self.sse_queues[key].append((queue, time.time()))
+        # Trigger cleanup of stale connections
+        self._cleanup_stale_queues()
         return queue
 
     def remove_sse_queue(self, queue: asyncio.Queue, user_id: str, org_id: str):
         """Remove an SSE event queue."""
         key = f"{org_id}:{user_id}"
         if key in self.sse_queues:
-            if queue in self.sse_queues[key]:
-                self.sse_queues[key].remove(queue)
+            self.sse_queues[key] = [
+                (q, ts) for q, ts in self.sse_queues[key] if q is not queue
+            ]
+            # Clean up empty lists
+            if not self.sse_queues[key]:
+                del self.sse_queues[key]
+
+    def _cleanup_stale_queues(self):
+        """Remove SSE queues that have been open too long (possible leak)."""
+        import time
+        now = time.time()
+        keys_to_delete = []
+
+        for key, queue_list in self.sse_queues.items():
+            # Filter out stale queues
+            fresh_queues = [
+                (q, ts) for q, ts in queue_list
+                if (now - ts) < self._max_queue_age
+            ]
+            if fresh_queues:
+                self.sse_queues[key] = fresh_queues
+            else:
+                keys_to_delete.append(key)
+
+        for key in keys_to_delete:
+            del self.sse_queues[key]
+
+    def get_connection_stats(self) -> dict[str, int]:
+        """Get connection statistics for monitoring."""
+        ws_count = sum(len(conns) for conns in self.active_connections.values())
+        sse_count = sum(len(queues) for queues in self.sse_queues.values())
+        return {
+            "websocket_connections": ws_count,
+            "sse_connections": sse_count,
+            "unique_users": len(self.active_connections) + len(self.sse_queues),
+        }
 
     async def broadcast_to_org(self, org_id: str, event_type: str, data: dict[str, Any]):
         """Broadcast an event to all connections in an organization."""
         message = {
             "event": event_type,
             "data": data,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
         # Send to WebSocket connections
@@ -76,12 +118,15 @@ class ConnectionManager:
                     except Exception:
                         pass
 
-        # Send to SSE queues
-        for key, queues in self.sse_queues.items():
+        # Send to SSE queues (now stored as tuples with timestamps)
+        for key, queue_list in self.sse_queues.items():
             if key.startswith(f"{org_id}:"):
-                for queue in queues:
+                for queue, _ in queue_list:
                     try:
-                        await queue.put(message)
+                        # Use put_nowait to avoid blocking; queue has maxsize
+                        queue.put_nowait(message)
+                    except asyncio.QueueFull:
+                        pass  # Skip if queue is full (client not consuming)
                     except Exception:
                         pass
 
@@ -91,7 +136,7 @@ class ConnectionManager:
         message = {
             "event": event_type,
             "data": data,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
         # Send to WebSocket connections
@@ -102,11 +147,13 @@ class ConnectionManager:
                 except Exception:
                     pass
 
-        # Send to SSE queues
+        # Send to SSE queues (now stored as tuples with timestamps)
         if key in self.sse_queues:
-            for queue in self.sse_queues[key]:
+            for queue, _ in self.sse_queues[key]:
                 try:
-                    await queue.put(message)
+                    queue.put_nowait(message)
+                except asyncio.QueueFull:
+                    pass  # Skip if queue is full
                 except Exception:
                     pass
 
@@ -166,7 +213,7 @@ async def event_generator(
                 yield f"event: {event_type}\ndata: {data}\n\n"
             except asyncio.TimeoutError:
                 # Send keepalive
-                yield f"event: keepalive\ndata: {json.dumps({'timestamp': datetime.utcnow().isoformat()})}\n\n"
+                yield f"event: keepalive\ndata: {json.dumps({'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
     except asyncio.CancelledError:
         pass
     finally:
@@ -278,7 +325,7 @@ async def websocket_endpoint(
             elif data.get("type") == "ping":
                 await websocket.send_json({
                     "type": "pong",
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
 
     except WebSocketDisconnect:

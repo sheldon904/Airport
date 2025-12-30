@@ -1,6 +1,6 @@
 """Audit logging service for compliance tracking."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
@@ -129,7 +129,7 @@ class AuditService:
                 details=details or {},
                 ip_address=ip_address,
                 user_agent=user_agent,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
 
             self.session.add(audit_log)

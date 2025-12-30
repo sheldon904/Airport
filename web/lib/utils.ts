@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { format, formatDistanceToNow, parseISO, differenceInDays } from 'date-fns';
+import { format, formatDistanceToNow, parseISO, differenceInDays, isPast, startOfDay } from 'date-fns';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -24,6 +24,18 @@ export function formatRelativeDate(date: string | Date): string {
 export function getDaysUntil(date: string | Date): number {
   const d = typeof date === 'string' ? parseISO(date) : date;
   return differenceInDays(d, new Date());
+}
+
+/**
+ * Check if a date is overdue (past end of day).
+ * Properly handles date-only values without timezone issues.
+ */
+export function isOverdue(date: string | Date): boolean {
+  const d = typeof date === 'string' ? parseISO(date) : date;
+  // Compare start of days to avoid timezone issues with date-only values
+  const today = startOfDay(new Date());
+  const dueDate = startOfDay(d);
+  return isPast(dueDate) && dueDate < today;
 }
 
 export function formatCurrency(amount: number): string {

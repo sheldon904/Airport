@@ -1,6 +1,6 @@
 """Deadline repository."""
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Sequence
 from uuid import UUID
 
@@ -173,7 +173,7 @@ class DeadlineRepository(BaseRepository[DeadlineModel]):
         return await self.update(
             deadline_id,
             status="completed",
-            completed_at=datetime.utcnow(),
+            completed_at=datetime.now(timezone.utc),
             completed_by=completed_by,
             notes=notes,
         )

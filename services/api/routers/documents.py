@@ -138,6 +138,8 @@ async def upload_document(
         "image/jpeg",
         "image/png",
         "image/tiff",
+        "image/webp",
+        "image/gif",
     ]
     content_type = file.content_type or "application/pdf"
     if content_type not in allowed_types:

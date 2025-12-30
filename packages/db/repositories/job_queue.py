@@ -1,6 +1,6 @@
 """Job queue repository for background processing."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Sequence
 from uuid import UUID, uuid4
 
@@ -30,7 +30,7 @@ class JobQueueRepository(BaseRepository[JobQueueModel]):
             job_type=job_type,
             payload=payload,
             priority=priority,
-            scheduled_at=scheduled_at or datetime.utcnow(),
+            scheduled_at=scheduled_at or datetime.now(timezone.utc),
             max_attempts=max_attempts,
         )
 
@@ -48,7 +48,7 @@ class JobQueueRepository(BaseRepository[JobQueueModel]):
             .where(
                 and_(
                     self.model.status == "pending",
-                    self.model.scheduled_at <= datetime.utcnow(),
+                    self.model.scheduled_at <= datetime.now(timezone.utc),
                     self.model.attempts < self.model.max_attempts,
                 )
             )
@@ -71,7 +71,7 @@ class JobQueueRepository(BaseRepository[JobQueueModel]):
                 .where(self.model.id == job.id)
                 .values(
                     status="processing",
-                    started_at=datetime.utcnow(),
+                    started_at=datetime.now(timezone.utc),
                     attempts=job.attempts + 1,
                 )
             )
@@ -89,7 +89,7 @@ class JobQueueRepository(BaseRepository[JobQueueModel]):
         return await self.update(
             job_id,
             status="completed",
-            completed_at=datetime.utcnow(),
+            completed_at=datetime.now(timezone.utc),
             result=result,
         )
 
@@ -113,7 +113,7 @@ class JobQueueRepository(BaseRepository[JobQueueModel]):
             job_id,
             status=status,
             error=error,
-            completed_at=datetime.utcnow() if status == "failed" else None,
+            completed_at=datetime.now(timezone.utc) if status == "failed" else None,
         )
 
     async def get_pending_count(self, job_type: str | None = None) -> int:
@@ -166,14 +166,14 @@ class JobQueueRepository(BaseRepository[JobQueueModel]):
             status="pending",
             error=None,
             attempts=0,
-            scheduled_at=datetime.utcnow(),
+            scheduled_at=datetime.now(timezone.utc),
         )
 
     async def cleanup_old_jobs(self, days: int = 30) -> int:
         """Delete completed/failed jobs older than N days."""
         from datetime import timedelta
 
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
         result = await self.session.execute(
             select(self.model).where(

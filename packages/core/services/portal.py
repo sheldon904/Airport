@@ -1,6 +1,6 @@
 """Portal service - external party access to transaction data."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -69,10 +69,10 @@ class PortalService:
 
         # Calculate expiration
         if expires_hours is not None:
-            expiry = datetime.utcnow() + timedelta(hours=expires_hours)
+            expiry = datetime.now(timezone.utc) + timedelta(hours=expires_hours)
         else:
             days = expires_in_days if expires_in_days is not None else PORTAL_TOKEN_EXPIRY_DAYS
-            expiry = datetime.utcnow() + timedelta(days=days)
+            expiry = datetime.now(timezone.utc) + timedelta(days=days)
 
         payload = {
             "tx": str(transaction_id),
@@ -80,7 +80,7 @@ class PortalService:
             "role": party_role,
             "type": "portal",
             "exp": expiry,
-            "iat": datetime.utcnow(),
+            "iat": datetime.now(timezone.utc),
         }
 
         return jwt.encode(payload, settings.secret_key, algorithm="HS256")

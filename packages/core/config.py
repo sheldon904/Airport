@@ -64,9 +64,10 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://localhost:8080"
     cors_allow_credentials: bool = True
 
-    # Frontend URLs (for emails)
+    # Frontend URLs (for emails and portal)
     frontend_url: str = "http://localhost:3000"
     password_reset_url: str = ""  # Defaults to {frontend_url}/reset-password
+    portal_base_url: str = "http://localhost:3000/portal"  # External party portal URL
 
     # Agent Configuration
     agent_timeout_seconds: int = 300
