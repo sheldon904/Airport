@@ -12,7 +12,7 @@ from packages.db.session import get_db
 from packages.core.services import PortalService, get_portal_service
 from packages.core.services.email import get_email_service
 from packages.core.exceptions import AuthenticationError, NotFoundError
-from services.api.routers.auth import get_current_user
+from services.api.dependencies import CurrentUserDep
 
 
 router = APIRouter()
@@ -147,8 +147,8 @@ Best regards,
 @router.post("/generate-token", response_model=GenerateTokenResponse)
 async def generate_portal_token(
     request: GenerateTokenRequest,
+    current_user: CurrentUserDep,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ) -> GenerateTokenResponse:
     """
     Generate a portal access token for an external party.
@@ -165,7 +165,7 @@ async def generate_portal_token(
     tx_service = TransactionService(db)
     transaction = await tx_service.get_transaction(
         request.transaction_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,
     )
 
     if not transaction:
@@ -198,9 +198,9 @@ async def generate_portal_token(
 @router.post("/invite", response_model=SendInviteResponse)
 async def send_portal_invite(
     request: SendInviteRequest,
+    current_user: CurrentUserDep,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ) -> SendInviteResponse:
     """
     Send a portal invite email to an external party.
@@ -217,7 +217,7 @@ async def send_portal_invite(
     tx_service = TransactionService(db)
     transaction = await tx_service.get_transaction(
         request.transaction_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,
     )
 
     if not transaction:
@@ -259,7 +259,7 @@ async def send_portal_invite(
         custom_message=custom_msg,
         portal_url=portal_url,
         expires_date=expires_at.strftime("%B %d, %Y at %I:%M %p"),
-        sender_name=current_user.get("name", "Transaction Coordinator"),
+        sender_name=current_user.name or "Transaction Coordinator",
         company_name="Airport TC",
     )
 
@@ -287,8 +287,8 @@ async def send_portal_invite(
 @router.post("/invite-all", response_model=BulkInviteResponse)
 async def send_bulk_invites(
     request: BulkInviteRequest,
+    current_user: CurrentUserDep,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ) -> BulkInviteResponse:
     """
     Send portal invites to all parties on a transaction.
@@ -305,7 +305,7 @@ async def send_bulk_invites(
     tx_service = TransactionService(db)
     transaction = await tx_service.get_transaction(
         request.transaction_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,
     )
 
     if not transaction:
@@ -375,7 +375,7 @@ async def send_bulk_invites(
                 custom_message=custom_msg,
                 portal_url=portal_url,
                 expires_date=expires_at.strftime("%B %d, %Y at %I:%M %p"),
-                sender_name=current_user.get("name", "Transaction Coordinator"),
+                sender_name=current_user.name or "Transaction Coordinator",
                 company_name="Airport TC",
             )
 
@@ -437,13 +437,15 @@ async def accept_portal_invite(
 
     # Update party info if provided
     if request.name or request.phone:
-        from packages.core.services import TransactionService
+        from packages.db.repositories.transaction import TransactionRepository
+        from sqlalchemy.orm.attributes import flag_modified
 
-        tx_service = TransactionService(db)
-        transaction = await tx_service.get_transaction_by_id(UUID(transaction_id))
+        tx_repo = TransactionRepository(db)
+        transaction = await tx_repo.get_by_id(UUID(transaction_id))
 
         if transaction and transaction.parties:
-            for party in transaction.parties:
+            parties = list(transaction.parties)
+            for party in parties:
                 if party.get("email") == party_email:
                     if request.name:
                         party["name"] = request.name
@@ -452,7 +454,7 @@ async def accept_portal_invite(
                     break
 
             # Save updated parties
-            await tx_service.update_parties(UUID(transaction_id), transaction.parties)
+            await tx_repo.update(UUID(transaction_id), parties=parties)
 
     return AcceptInviteResponse(
         success=True,
@@ -517,8 +519,8 @@ async def validate_portal_token(
 @router.get("/tokens/{transaction_id}")
 async def list_portal_tokens(
     transaction_id: UUID,
+    current_user: CurrentUserDep,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
     """
     List active portal tokens for a transaction.
@@ -533,7 +535,7 @@ async def list_portal_tokens(
     tx_service = TransactionService(db)
     transaction = await tx_service.get_transaction(
         transaction_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,
     )
 
     if not transaction:
@@ -552,8 +554,8 @@ async def list_portal_tokens(
 async def revoke_portal_token(
     transaction_id: UUID,
     party_email: str,
+    current_user: CurrentUserDep,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
     """
     Revoke a portal token for a specific party.
@@ -568,7 +570,7 @@ async def revoke_portal_token(
     tx_service = TransactionService(db)
     transaction = await tx_service.get_transaction(
         transaction_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,
     )
 
     if not transaction:

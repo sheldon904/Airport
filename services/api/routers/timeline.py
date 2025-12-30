@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm.attributes import flag_modified
 
 from services.api.dependencies import (
     CurrentUserDep,
@@ -463,13 +464,17 @@ async def get_transaction_timeline(
     if not filter_types or "checklist" in filter_types:
         if transaction.checklist:
             for item in (transaction.checklist.items or []):
-                if item.get("completed_at"):
+                completed_at = item.get("completed_at")
+                if completed_at:
+                    # Handle both string and datetime values
+                    if isinstance(completed_at, str):
+                        completed_at = datetime.fromisoformat(completed_at)
                     events.append(TimelineEvent(
                         id=f"checklist-{item.get('id')}",
                         event_type="checklist",
                         title=f"Completed: {item.get('name')}",
                         description=item.get("description"),
-                        timestamp=datetime.fromisoformat(item["completed_at"]),
+                        timestamp=completed_at,
                         actor=item.get("completed_by"),
                         metadata={
                             "item_id": item.get("id"),
@@ -504,6 +509,7 @@ async def update_checklist_item(
     request: UpdateChecklistItemRequest,
     current_user: CurrentUserDep,
     tx_service: TransactionServiceDep,
+    db: DbSessionDep,
 ) -> ChecklistUpdateResponse:
     """
     Update a checklist item status.
@@ -570,9 +576,10 @@ async def update_checklist_item(
             detail=f"Checklist item '{item_id}' not found",
         )
 
-    # Update the checklist
+    # Update the checklist - mark JSONB column as modified for SQLAlchemy
     transaction.checklist.items = items
-    await tx_service.update_checklist(transaction_id, transaction.checklist)
+    flag_modified(transaction.checklist, "items")
+    await db.flush()
 
     # Calculate completion
     completed = sum(1 for i in items if i.get("status") == "completed")
