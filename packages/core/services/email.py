@@ -66,7 +66,9 @@ def sanitize_email_address(email: str | None) -> str | None:
     """
     Validate and sanitize an email address.
 
-    Returns None if the email is invalid.
+    Returns None if the email is invalid or contains suspicious characters.
+    For security, we reject emails that contain control characters rather
+    than trying to sanitize them, as this could indicate an attack attempt.
     """
     if not email:
         return None
@@ -74,8 +76,10 @@ def sanitize_email_address(email: str | None) -> str | None:
     # Basic sanitization
     email = email.strip().lower()
 
-    # Remove any control characters
-    email = re.sub(r'[\x00-\x1f\x7f]', '', email)
+    # Reject emails with control characters (don't sanitize - reject for security)
+    if re.search(r'[\x00-\x1f\x7f]', email):
+        logger.warning("email_address_contains_control_chars", email=repr(email[:50]))
+        return None
 
     # Basic email format validation
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
