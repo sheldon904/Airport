@@ -1,12 +1,13 @@
-"""Email service for sending notifications."""
+"""Email service for sending notifications with input sanitization."""
 
 import asyncio
+import html
+import re
 import smtplib
 import ssl
 from abc import ABC, abstractmethod
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from functools import lru_cache
 from typing import Any
 
 import structlog
@@ -22,7 +23,101 @@ class EmailSendError(Exception):
         self.original_error = original_error
         super().__init__(message)
 
+
 logger = structlog.get_logger()
+
+
+def sanitize_email_input(text: str | None, max_length: int = 1000) -> str:
+    """
+    Sanitize text for use in email headers and body.
+
+    Prevents email header injection and removes dangerous content.
+
+    Args:
+        text: Input text to sanitize
+        max_length: Maximum allowed length
+
+    Returns:
+        Sanitized text safe for email use
+    """
+    if not text:
+        return ""
+
+    # Convert to string if needed
+    text = str(text)
+
+    # Remove control characters (including newlines in headers)
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+    # Prevent email header injection
+    # Remove CRLF sequences that could inject new headers
+    text = re.sub(r'\r\n|\r|\n', ' ', text)
+
+    # Remove potential header injection patterns
+    text = re.sub(r'(?i)(content-type|bcc|cc|to|from|subject|reply-to):', '[REMOVED]:', text)
+
+    # Truncate to max length
+    text = text[:max_length].strip()
+
+    return text
+
+
+def sanitize_email_address(email: str | None) -> str | None:
+    """
+    Validate and sanitize an email address.
+
+    Returns None if the email is invalid or contains suspicious characters.
+    For security, we reject emails that contain control characters rather
+    than trying to sanitize them, as this could indicate an attack attempt.
+    """
+    if not email:
+        return None
+
+    # Basic sanitization
+    email = email.strip().lower()
+
+    # Reject emails with control characters (don't sanitize - reject for security)
+    if re.search(r'[\x00-\x1f\x7f]', email):
+        logger.warning("email_address_contains_control_chars", email=repr(email[:50]))
+        return None
+
+    # Basic email format validation
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_pattern, email):
+        logger.warning("email_address_invalid", email=email[:50])
+        return None
+
+    # Check for suspicious patterns
+    if '..' in email or email.startswith('.') or email.endswith('.'):
+        logger.warning("email_address_suspicious", email=email[:50])
+        return None
+
+    return email
+
+
+def sanitize_html_body(html_content: str | None, max_length: int = 50000) -> str:
+    """
+    Sanitize HTML content for email body.
+
+    Allows safe HTML but removes scripts and dangerous elements.
+    """
+    if not html_content:
+        return ""
+
+    # Remove script tags and their content
+    html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove style tags (can be used for tracking)
+    html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove event handlers
+    html_content = re.sub(r'\s+on\w+\s*=\s*["\'][^"\']*["\']', '', html_content, flags=re.IGNORECASE)
+
+    # Remove javascript: URLs
+    html_content = re.sub(r'javascript:', 'blocked:', html_content, flags=re.IGNORECASE)
+
+    # Truncate
+    return html_content[:max_length]
 
 
 class EmailService(ABC):
@@ -103,24 +198,36 @@ class SMTPEmailService(EmailService):
         reply_to: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
     ) -> bool:
-        """Send an email via SMTP."""
+        """Send an email via SMTP with input sanitization."""
+        # Sanitize all inputs (NEW-016 fix)
+        sanitized_to = sanitize_email_address(to_email)
+        if not sanitized_to:
+            self.logger.error("email_invalid_recipient", to_email=to_email[:50])
+            return False
+
+        sanitized_subject = sanitize_email_input(subject, max_length=200)
+        sanitized_body = sanitize_email_input(body, max_length=50000)
+        sanitized_html = sanitize_html_body(html_body) if html_body else None
+
         from_addr = from_email or settings.from_email
+        sanitized_from = sanitize_email_address(from_addr) or settings.from_email
+        sanitized_reply_to = sanitize_email_address(reply_to) if reply_to else None
 
         # Create message
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = from_addr
-        msg["To"] = to_email
+        msg["Subject"] = sanitized_subject
+        msg["From"] = sanitized_from
+        msg["To"] = sanitized_to
 
-        if reply_to:
-            msg["Reply-To"] = reply_to
+        if sanitized_reply_to:
+            msg["Reply-To"] = sanitized_reply_to
 
         # Add plain text body
-        msg.attach(MIMEText(body, "plain"))
+        msg.attach(MIMEText(sanitized_body, "plain"))
 
         # Add HTML body if provided
-        if html_body:
-            msg.attach(MIMEText(html_body, "html"))
+        if sanitized_html:
+            msg.attach(MIMEText(sanitized_html, "html"))
 
         # Send in a thread to avoid blocking
         loop = asyncio.get_event_loop()
@@ -128,8 +235,8 @@ class SMTPEmailService(EmailService):
             result = await loop.run_in_executor(
                 None,
                 self._send_smtp,
-                from_addr,
-                to_email,
+                sanitized_from,
+                sanitized_to,
                 msg.as_string(),
             )
             return result
