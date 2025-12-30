@@ -344,21 +344,23 @@ class ConsoleEmailService(EmailService):
 
         self.sent_emails.append(email_record)
 
+        # REM-006: Use structured logging instead of print statements
         self.logger.info(
             "email_logged",
             to_email=to_email,
+            from_email=from_addr,
             subject=subject,
+            body_preview=body[:200] if body else "",
+            has_html=html_body is not None,
+            attachments_count=len(attachments) if attachments else 0,
         )
 
-        print("\n" + "=" * 60)
-        print("📧 EMAIL (Console Mode)")
-        print("=" * 60)
-        print(f"To: {to_email}")
-        print(f"From: {from_addr}")
-        print(f"Subject: {subject}")
-        print("-" * 60)
-        print(body)
-        print("=" * 60 + "\n")
+        # Only output to console in debug mode, not production
+        if settings.debug:
+            self.logger.debug(
+                "email_body_content",
+                body=body,
+            )
 
         return True
 

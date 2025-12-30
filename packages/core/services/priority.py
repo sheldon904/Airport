@@ -1,10 +1,11 @@
 """Priority service - transaction health scoring and priority management."""
 
+import logging
 from datetime import date, datetime, timedelta
 from typing import Any, Sequence
 from uuid import UUID
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, case, literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.db.models import (
@@ -13,6 +14,8 @@ from packages.db.models import (
     DocumentModel,
     CommunicationLogModel,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class HealthStatus:
@@ -73,6 +76,8 @@ class PriorityService:
         """
         Calculate health score for a transaction.
 
+        REM-012: Optimized to use combined queries instead of N+1 pattern.
+
         Returns:
             tuple: (score 0-100, status, list of issues)
         """
@@ -88,6 +93,7 @@ class PriorityService:
             return 0, HealthStatus.ON_TRACK, []
 
         today = date.today()
+        due_soon_date = today + timedelta(days=3)
 
         # Factor 1: Days to closing
         if transaction.closing_date:
@@ -100,39 +106,45 @@ class PriorityService:
             elif days_to_close <= 14:
                 score += HEALTH_WEIGHTS["days_to_closing"]["8-14"]
 
-        # Factor 2: Overdue deadlines
-        overdue_stmt = select(func.count()).select_from(DeadlineModel).where(
-            and_(
-                DeadlineModel.transaction_id == transaction_id,
-                DeadlineModel.due_date < today,
-                DeadlineModel.status.notin_(["completed", "waived"]),
-            )
-        )
-        overdue_result = await self.session.execute(overdue_stmt)
-        overdue_count = overdue_result.scalar() or 0
+        # REM-012: Combined deadline query using conditional aggregation
+        # This replaces 2 separate queries with 1
+        deadline_stats_stmt = select(
+            func.sum(
+                case(
+                    (and_(
+                        DeadlineModel.due_date < today,
+                        DeadlineModel.status.notin_(["completed", "waived"]),
+                    ), 1),
+                    else_=0
+                )
+            ).label("overdue_count"),
+            func.sum(
+                case(
+                    (and_(
+                        DeadlineModel.due_date >= today,
+                        DeadlineModel.due_date <= due_soon_date,
+                        DeadlineModel.status.notin_(["completed", "waived"]),
+                    ), 1),
+                    else_=0
+                )
+            ).label("due_soon_count"),
+        ).where(DeadlineModel.transaction_id == transaction_id)
+
+        deadline_result = await self.session.execute(deadline_stats_stmt)
+        deadline_row = deadline_result.one_or_none()
+
+        overdue_count = int(deadline_row.overdue_count or 0) if deadline_row else 0
+        due_soon_count = int(deadline_row.due_soon_count or 0) if deadline_row else 0
 
         if overdue_count > 0:
             score += overdue_count * HEALTH_WEIGHTS["overdue_deadline"]
             issues.append(f"{overdue_count} overdue deadline(s)")
 
-        # Factor 3: Deadlines due soon (within 3 days)
-        due_soon_date = today + timedelta(days=3)
-        due_soon_stmt = select(func.count()).select_from(DeadlineModel).where(
-            and_(
-                DeadlineModel.transaction_id == transaction_id,
-                DeadlineModel.due_date >= today,
-                DeadlineModel.due_date <= due_soon_date,
-                DeadlineModel.status.notin_(["completed", "waived"]),
-            )
-        )
-        due_soon_result = await self.session.execute(due_soon_stmt)
-        due_soon_count = due_soon_result.scalar() or 0
-
         if due_soon_count > 0:
             score += due_soon_count * HEALTH_WEIGHTS["due_soon_deadline"]
             issues.append(f"{due_soon_count} deadline(s) due within 3 days")
 
-        # Factor 4: Documents pending review
+        # Factor 4: Documents pending review (single query)
         pending_stmt = select(func.count()).select_from(DocumentModel).where(
             and_(
                 DocumentModel.transaction_id == transaction_id,
@@ -163,9 +175,9 @@ class PriorityService:
             if stalled_count > 0:
                 score += stalled_count * HEALTH_WEIGHTS["stalled_communication"]
                 issues.append(f"{stalled_count} communication(s) awaiting response")
-        except Exception:
-            # Table might not exist yet
-            pass
+        except Exception as e:
+            # Table might not exist yet - log and continue
+            logger.debug("communication_log_query_failed", extra={"error": str(e)})
 
         # Cap score at 100
         score = min(score, 100)

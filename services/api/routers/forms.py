@@ -20,7 +20,8 @@ from packages.forms.disclosures import (
     get_required_disclosures,
     get_disclosure_checklist,
 )
-from services.api.routers.auth import get_current_user
+# REM-003: Use standard CurrentUserDep for consistent auth handling
+from services.api.dependencies import CurrentUserDep, DbSessionDep
 from packages.core.services import TransactionService
 
 
@@ -64,7 +65,7 @@ class DisclosureChecklistResponse(BaseModel):
 @router.get("/templates", response_model=FormListResponse)
 async def list_form_templates(
     category: str | None = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: CurrentUserDep = None,  # REM-003: Use typed CurrentUserDep
 ) -> FormListResponse:
     """
     List available Florida form templates.
@@ -101,7 +102,7 @@ async def list_form_templates(
 @router.get("/templates/{template_id}")
 async def get_form_template(
     template_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> dict[str, Any]:
     """
     Get detailed form template including all field definitions.
@@ -137,8 +138,8 @@ async def get_form_template(
 async def populate_form(
     template_id: str,
     request: PopulateFormRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> PopulateFormResponse:
     """
     Populate a form template with transaction data.
@@ -149,7 +150,7 @@ async def populate_form(
     tx_service = TransactionService(db)
     transaction = await tx_service.get_transaction(
         request.transaction_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute, not dict key
     )
 
     if not transaction:
@@ -192,8 +193,8 @@ async def populate_form(
 @router.get("/required/{transaction_id}")
 async def get_required_forms(
     transaction_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> dict[str, Any]:
     """
     Get list of required forms for a transaction based on its characteristics.
@@ -202,7 +203,7 @@ async def get_required_forms(
     tx_service = TransactionService(db)
     transaction = await tx_service.get_transaction(
         transaction_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
     )
 
     if not transaction:
@@ -235,8 +236,8 @@ async def get_required_forms(
 @router.get("/disclosures/{transaction_id}", response_model=DisclosureChecklistResponse)
 async def get_disclosure_requirements(
     transaction_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> DisclosureChecklistResponse:
     """
     Get required disclosure checklist for a transaction.
@@ -245,7 +246,7 @@ async def get_disclosure_requirements(
     tx_service = TransactionService(db)
     transaction = await tx_service.get_transaction(
         transaction_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
     )
 
     if not transaction:
@@ -270,8 +271,8 @@ async def get_disclosure_requirements(
 @router.post("/populate-all/{transaction_id}")
 async def populate_all_required_forms(
     transaction_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    db: DbSessionDep,  # REM-003: Use typed dependency
+    current_user: CurrentUserDep,  # REM-003: Use typed CurrentUserDep
 ) -> dict[str, Any]:
     """
     Populate all required forms for a transaction.
@@ -282,7 +283,7 @@ async def populate_all_required_forms(
     tx_service = TransactionService(db)
     transaction = await tx_service.get_transaction(
         transaction_id,
-        UUID(current_user["organization_id"]),
+        current_user.organization_id,  # REM-003: Access as attribute
     )
 
     if not transaction:

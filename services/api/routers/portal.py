@@ -1,6 +1,7 @@
 """Portal router - external party portal access endpoints."""
 
 import html
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -17,6 +18,7 @@ from packages.core.exceptions import AuthenticationError, NotFoundError
 from packages.core.config import settings
 from services.api.dependencies import CurrentUserDep
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -323,8 +325,18 @@ async def send_portal_invite(
         success = True
         message = f"Invite sent to {request.party_email}"
     except Exception as e:
+        # REM-005: Log error but don't expose internal details in response
+        logger.error(
+            "portal_invite_send_failed",
+            extra={
+                "party_email": request.party_email,
+                "transaction_id": str(request.transaction_id),
+                "error_type": type(e).__name__,
+                "error": str(e),
+            }
+        )
         success = False
-        message = f"Failed to send invite: {str(e)}"
+        message = "Failed to send invite. Please try again later."
 
     return SendInviteResponse(
         success=success,
@@ -450,12 +462,23 @@ async def send_bulk_invites(
             sent += 1
 
         except Exception as e:
+            # REM-005: Log error but don't expose internal details in response
+            logger.error(
+                "portal_bulk_invite_failed",
+                extra={
+                    "email": email,
+                    "role": role,
+                    "transaction_id": str(request.transaction_id),
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                }
+            )
             results.append({
                 "name": name,
                 "role": role,
                 "email": email,
                 "status": "failed",
-                "error": str(e),
+                "error": "Failed to send invite",  # Generic message
             })
             failed += 1
 
@@ -484,7 +507,12 @@ async def accept_portal_invite(
     try:
         payload = portal_service.validate_portal_token(request.token)
     except AuthenticationError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        # REM-005: Don't expose internal error details
+        logger.warning(
+            "portal_accept_invite_auth_failed",
+            extra={"error": str(e)}
+        )
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     transaction_id = payload.get("tx")
     party_email = payload.get("email")
@@ -535,9 +563,19 @@ async def get_portal_data(
     try:
         data = await portal_service.get_portal_data(token)
     except AuthenticationError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        # REM-005: Don't expose internal error details
+        logger.warning(
+            "portal_view_auth_failed",
+            extra={"error": str(e)}
+        )
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     except NotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        # REM-005: Don't expose internal error details
+        logger.warning(
+            "portal_view_not_found",
+            extra={"error": str(e)}
+        )
+        raise HTTPException(status_code=404, detail="Transaction not found")
 
     return PortalDataResponse(**data)
 
@@ -565,9 +603,14 @@ async def validate_portal_token(
             "expires_at": payload.get("exp"),
         }
     except AuthenticationError as e:
+        # REM-005: Log but don't expose internal error details
+        logger.debug(
+            "portal_validate_token_failed",
+            extra={"error": str(e)}
+        )
         return {
             "valid": False,
-            "error": str(e),
+            "error": "Invalid or expired token",  # Generic message
         }
 
 
