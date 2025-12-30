@@ -8,6 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Home, Loader2, AlertCircle } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
+import { getErrorMessage } from '@/lib/api';
 
 const loginSchema = z.object({
   email: z.string().email('Please enter a valid email address'),
@@ -37,8 +38,9 @@ export default function LoginPage() {
     try {
       await login(data.email, data.password);
       router.push('/dashboard');
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Invalid email or password');
+    } catch (err: unknown) {
+      // Use proper error typing (NEW-018 fix)
+      setError(getErrorMessage(err) || 'Invalid email or password');
     } finally {
       setIsLoading(false);
     }
