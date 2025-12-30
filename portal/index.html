@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transaction Portal - Airport TC</title>
+    <link rel="stylesheet" href="static/styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Loading State -->
+        <div id="loading" class="loading-container">
+            <div class="spinner"></div>
+            <p>Loading transaction details...</p>
+        </div>
+
+        <!-- Error State -->
+        <div id="error" class="error-container hidden">
+            <div class="error-icon">!</div>
+            <h2>Access Error</h2>
+            <p id="error-message">Unable to access transaction.</p>
+            <a href="/" class="btn btn-primary">Return Home</a>
+        </div>
+
+        <!-- Main Portal Content -->
+        <div id="portal" class="portal-container hidden">
+            <!-- Header -->
+            <header class="portal-header">
+                <div class="header-content">
+                    <h1 class="logo">Airport TC</h1>
+                    <div class="user-info">
+                        <span id="user-role" class="role-badge"></span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Property Banner -->
+            <section class="property-banner">
+                <h2 id="property-address">Loading...</h2>
+                <div class="property-meta">
+                    <span id="transaction-status" class="status-badge"></span>
+                    <span id="closing-date" class="meta-item"></span>
+                </div>
+            </section>
+
+            <!-- Main Content Grid -->
+            <main class="portal-main">
+                <!-- Summary Cards -->
+                <section class="summary-cards">
+                    <div class="card summary-card">
+                        <div class="card-icon deadlines-icon"></div>
+                        <div class="card-content">
+                            <span class="card-value" id="deadlines-count">-</span>
+                            <span class="card-label">Upcoming Deadlines</span>
+                        </div>
+                    </div>
+                    <div class="card summary-card">
+                        <div class="card-icon documents-icon"></div>
+                        <div class="card-content">
+                            <span class="card-value" id="documents-count">-</span>
+                            <span class="card-label">Documents</span>
+                        </div>
+                    </div>
+                    <div class="card summary-card">
+                        <div class="card-icon parties-icon"></div>
+                        <div class="card-content">
+                            <span class="card-value" id="parties-count">-</span>
+                            <span class="card-label">Parties</span>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Two Column Layout -->
+                <div class="content-grid">
+                    <!-- Left Column -->
+                    <div class="content-column">
+                        <!-- Deadlines Section -->
+                        <section class="card">
+                            <h3 class="card-title">
+                                <span class="icon calendar-icon"></span>
+                                Important Deadlines
+                            </h3>
+                            <div id="deadlines-list" class="deadline-list">
+                                <!-- Populated by JS -->
+                            </div>
+                        </section>
+
+                        <!-- Documents Section -->
+                        <section class="card">
+                            <h3 class="card-title">
+                                <span class="icon document-icon"></span>
+                                Documents
+                            </h3>
+                            <div id="documents-list" class="document-list">
+                                <!-- Populated by JS -->
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Right Column -->
+                    <div class="content-column">
+                        <!-- Transaction Details -->
+                        <section class="card">
+                            <h3 class="card-title">
+                                <span class="icon info-icon"></span>
+                                Transaction Details
+                            </h3>
+                            <div class="details-grid">
+                                <div class="detail-item">
+                                    <span class="detail-label">Purchase Price</span>
+                                    <span class="detail-value" id="purchase-price">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Effective Date</span>
+                                    <span class="detail-value" id="effective-date">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Closing Date</span>
+                                    <span class="detail-value" id="closing-date-detail">-</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Your Role</span>
+                                    <span class="detail-value" id="your-role">-</span>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Parties Section -->
+                        <section class="card">
+                            <h3 class="card-title">
+                                <span class="icon people-icon"></span>
+                                Transaction Parties
+                            </h3>
+                            <div id="parties-list" class="parties-list">
+                                <!-- Populated by JS -->
+                            </div>
+                        </section>
+
+                        <!-- Timeline Section -->
+                        <section class="card">
+                            <h3 class="card-title">
+                                <span class="icon timeline-icon"></span>
+                                Recent Activity
+                            </h3>
+                            <div id="timeline-list" class="timeline-list">
+                                <!-- Populated by JS -->
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </main>
+
+            <!-- Footer -->
+            <footer class="portal-footer">
+                <p>Powered by Airport TC | <span id="last-updated"></span></p>
+            </footer>
+        </div>
+    </div>
+
+    <script src="static/portal.js"></script>
+</body>
+</html>

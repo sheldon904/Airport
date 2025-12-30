@@ -10,7 +10,21 @@ import structlog
 from packages.core.config import settings
 from packages.core.exceptions import register_exception_handlers
 from packages.core.rate_limit import RateLimitMiddleware
-from services.api.routers import auth, transactions, documents, deadlines, health, reports, audit
+from services.api.routers import (
+    auth,
+    transactions,
+    documents,
+    deadlines,
+    health,
+    reports,
+    audit,
+    forms,
+    portal,
+    contacts,
+    realtime,
+    timeline,
+    communications,
+)
 
 logger = structlog.get_logger()
 
@@ -57,3 +71,9 @@ app.include_router(documents.router, prefix="/api/v1/documents", tags=["Document
 app.include_router(deadlines.router, prefix="/api/v1/deadlines", tags=["Deadlines"])
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])
 app.include_router(audit.router, prefix="/api/v1/audit", tags=["Audit"])
+app.include_router(forms.router, prefix="/api/v1/forms", tags=["Forms"])
+app.include_router(portal.router, prefix="/api/v1/portal", tags=["Portal"])
+app.include_router(contacts.router, prefix="/api/v1/contacts", tags=["Contacts"])
+app.include_router(realtime.router, prefix="/api/v1/realtime", tags=["Real-time"])
+app.include_router(timeline.router, prefix="/api/v1/transactions", tags=["Timeline"])
+app.include_router(communications.router, prefix="/api/v1/communications", tags=["Communications"])
