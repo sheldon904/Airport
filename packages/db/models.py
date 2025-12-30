@@ -145,6 +145,10 @@ class TransactionModel(Base):
         PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
 
+    # Priority and health tracking
+    priority_score: Mapped[int] = mapped_column(Integer, default=50)
+    health_status: Mapped[str] = mapped_column(String(20), default="on_track")
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -204,6 +208,14 @@ class DocumentModel(Base):
     extracted_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     extraction_confidence: Mapped[float | None] = mapped_column()
     needs_review_reason: Mapped[str | None] = mapped_column(Text)
+
+    # Privacy - PII redaction
+    redacted_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    pii_detected: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+
+    # Access control
+    access_level: Mapped[str] = mapped_column(String(50), default="organization")
+    is_confidential: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Verification
     verified_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -363,4 +375,108 @@ class JobQueueModel(Base):
     __table_args__ = (
         Index("ix_job_queue_status_scheduled", "status", "scheduled_at"),
         Index("ix_job_queue_job_type", "job_type"),
+    )
+
+
+class CommunicationLogModel(Base):
+    """Communication log for tracking transaction communications.
+
+    Tracks all inbound and outbound communications related to transactions,
+    enabling queries like "where are we with the deposit receipt?"
+    """
+
+    __tablename__ = "communication_log"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    transaction_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("transactions.id", ondelete="SET NULL")
+    )
+    organization_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+
+    # Message details
+    direction: Mapped[str] = mapped_column(String(10), nullable=False)  # 'inbound', 'outbound'
+    channel: Mapped[str] = mapped_column(String(20), default="email")
+    subject: Mapped[str | None] = mapped_column(String(500))
+    body_preview: Mapped[str | None] = mapped_column(String(500))
+    full_body: Mapped[str | None] = mapped_column(Text)
+
+    # Participants
+    sender: Mapped[str | None] = mapped_column(String(255))
+    recipients: Mapped[list[str]] = mapped_column(JSONB, default=list)
+
+    # Categorization
+    topic: Mapped[str | None] = mapped_column(String(100))
+
+    # Status
+    status: Mapped[str] = mapped_column(String(50), default="sent")
+
+    # Related entities
+    related_document_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    related_deadline_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("deadlines.id", ondelete="SET NULL")
+    )
+
+    # Extra data
+    extra_data: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+    # Timestamps
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_communication_log_transaction_id", "transaction_id"),
+        Index("ix_communication_log_organization_id", "organization_id"),
+        Index("ix_communication_log_topic", "topic"),
+        Index("ix_communication_log_created_at", "created_at"),
+    )
+
+
+class ContactModel(Base):
+    """Contact for lightweight CRM functionality.
+
+    Stores contacts extracted from transactions and allows tracking
+    interaction history across multiple transactions.
+    """
+
+    __tablename__ = "contacts"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    organization_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+
+    # Contact info
+    email: Mapped[str | None] = mapped_column(String(255))
+    phone: Mapped[str | None] = mapped_column(String(20))
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    contact_type: Mapped[str] = mapped_column(String(50), default="other")
+    company: Mapped[str | None] = mapped_column(String(255))
+
+    # Source tracking
+    source: Mapped[str] = mapped_column(String(50), default="manual")
+
+    # Transaction history
+    transaction_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_transaction_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    last_transaction_date: Mapped[date | None] = mapped_column(Date)
+
+    # Organization and categorization
+    tags: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    notes: Mapped[str | None] = mapped_column(Text)
+    extra_data: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_contacts_organization_id", "organization_id"),
+        Index("ix_contacts_email", "email"),
+        Index("ix_contacts_contact_type", "contact_type"),
     )
