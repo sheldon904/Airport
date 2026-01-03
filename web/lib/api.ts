@@ -234,7 +234,8 @@ class ApiClient {
   ): Promise<TransactionListResponse> {
     const params: Record<string, string | number> = { page, page_size: pageSize };
     if (status) params.status = status;
-    const response = await this.client.get('/api/v1/transactions', { params });
+    // Use trailing slash to avoid 307 redirect which loses auth header
+    const response = await this.client.get('/api/v1/transactions/', { params });
     return response.data;
   }
 
@@ -244,7 +245,8 @@ class ApiClient {
   }
 
   async createTransaction(data: CreateTransactionForm): Promise<Transaction> {
-    const response = await this.client.post('/api/v1/transactions', data);
+    // Use trailing slash to avoid 307 redirect which loses auth header
+    const response = await this.client.post('/api/v1/transactions/', data);
     return response.data;
   }
 
