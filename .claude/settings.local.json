@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where docker:*)",
+      "Bash(docker --version:*)",
+      "Bash(where:*)",
+      "Bash(node --version:*)",
+      "Bash(docker info:*)",
+      "Bash(test:*)",
+      "Bash(docker-compose:*)",
+      "Bash(python -m venv:*)",
+      "Bash(\"C:\\\\Users\\\\sheld\\\\Documents\\\\GitHub\\\\Airport\\\\venv\\\\Scripts\\\\pip.exe\" install -e \"C:\\\\Users\\\\sheld\\\\Documents\\\\GitHub\\\\Airport[dev]\")",
+      "Bash(\"C:\\\\Users\\\\sheld\\\\Documents\\\\GitHub\\\\Airport\\\\venv\\\\Scripts\\\\alembic.exe\" upgrade head)",
+      "Bash(docker exec:*)",
+      "Bash(npm install:*)",
+      "Bash(\"C:\\\\Users\\\\sheld\\\\Documents\\\\GitHub\\\\Airport\\\\venv\\\\Scripts\\\\uvicorn.exe\" services.api.main:app --reload --port 8000)",
+      "Bash(timeout:*)",
+      "Bash(curl:*)",
+      "Bash(\"C:\\\\Users\\\\sheld\\\\Documents\\\\GitHub\\\\Airport\\\\venv\\\\Scripts\\\\pip.exe\" install email-validator)",
+      "Bash(powershell -Command \"Start-Sleep -Seconds 5; Invoke-WebRequest -Uri ''http://localhost:8000/health'' -UseBasicParsing | Select-Object -ExpandProperty Content\")",
+      "Bash(\"C:\\\\Users\\\\sheld\\\\Documents\\\\GitHub\\\\Airport\\\\venv\\\\Scripts\\\\pip.exe\" install python-magic-bin)",
+      "Bash(powershell -Command \"Start-Sleep -Seconds 6; Invoke-WebRequest -Uri ''http://localhost:8000/health'' -UseBasicParsing | Select-Object -ExpandProperty Content\")",
+      "Bash(npm run dev:*)",
+      "Bash(powershell -Command \"Start-Sleep -Seconds 8; Invoke-WebRequest -Uri ''http://localhost:3000'' -UseBasicParsing | Select-Object -ExpandProperty StatusCode\")",
+      "Bash(\"C:\\\\Users\\\\sheld\\\\Documents\\\\GitHub\\\\Airport\\\\venv\\\\Scripts\\\\pip.exe\" install \"bcrypt==4.2.1\")"
+    ]
+  }
+}

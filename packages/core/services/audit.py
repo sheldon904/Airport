@@ -129,7 +129,7 @@ class AuditService:
                 details=details or {},
                 ip_address=ip_address,
                 user_agent=user_agent,
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.utcnow(),  # Use naive UTC datetime for PostgreSQL TIMESTAMP WITHOUT TIME ZONE
             )
 
             self.session.add(audit_log)

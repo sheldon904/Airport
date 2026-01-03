@@ -42,9 +42,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            # Only commit if there are pending changes (not for read-only operations)
-            if session.new or session.dirty or session.deleted:
-                await session.commit()
+            # Always commit - flush() clears session.new so we can't reliably check
+            # For read-only operations, commit is essentially a no-op
+            await session.commit()
         except IntegrityError as e:
             logger.warning(
                 "database_integrity_error",
@@ -95,9 +95,8 @@ async def get_db_context() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            # Only commit if there are pending changes
-            if session.new or session.dirty or session.deleted:
-                await session.commit()
+            # Always commit - flush() clears session.new so we can't reliably check
+            await session.commit()
         except IntegrityError as e:
             logger.warning(
                 "database_integrity_error",
