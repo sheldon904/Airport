@@ -105,6 +105,14 @@ export interface Document {
   transaction?: Transaction;
 }
 
+export interface Contingency {
+  contingency_type: string;
+  description: string;
+  deadline_date?: string;
+  days_from_effective?: number;
+  waived?: boolean;
+}
+
 export interface ExtractedData {
   document_id: string;
   document_type: string;
@@ -113,6 +121,16 @@ export interface ExtractedData {
   confidence_score?: number;
   needs_review_items: string[];
   flags?: string[];
+  // Direct extraction fields used by document viewer
+  property_address?: PropertyAddress;
+  purchase_price?: number;
+  earnest_money?: number;
+  effective_date?: string;
+  closing_date?: string;
+  parties?: Party[];
+  contingencies?: Contingency[];
+  unclear_items?: string[];
+  missing_signatures?: string[];
 }
 
 export interface Deadline {
