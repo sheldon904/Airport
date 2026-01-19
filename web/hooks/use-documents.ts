@@ -1,11 +1,18 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { DEMO_MODE, mockDocumentsNeedingReview } from '@/lib/mock-data';
 import { Document, ExtractedData } from '@/types';
 
 export function useDocuments(transactionId?: string, params?: { status?: string }) {
   return useQuery<Document[]>({
     queryKey: ['documents', transactionId, params],
     queryFn: async () => {
+      if (DEMO_MODE) {
+        if (params?.status === 'needs_review') {
+          return mockDocumentsNeedingReview;
+        }
+        return mockDocumentsNeedingReview.filter(d => d.transaction_id === transactionId);
+      }
       if (params?.status === 'needs_review') {
         return api.getReviewQueue();
       }
@@ -20,7 +27,13 @@ export function useDocuments(transactionId?: string, params?: { status?: string 
 export function useDocument(id: string) {
   return useQuery<Document>({
     queryKey: ['documents', 'detail', id],
-    queryFn: () => api.getDocument(id),
+    queryFn: () => {
+      if (DEMO_MODE) {
+        const doc = mockDocumentsNeedingReview.find(d => d.id === id);
+        return doc || mockDocumentsNeedingReview[0];
+      }
+      return api.getDocument(id);
+    },
     enabled: !!id,
   });
 }
@@ -28,7 +41,17 @@ export function useDocument(id: string) {
 export function useDocumentExtraction(id: string) {
   return useQuery<ExtractedData>({
     queryKey: ['documents', 'extraction', id],
-    queryFn: () => api.getExtractedData(id),
+    queryFn: () => {
+      if (DEMO_MODE) {
+        return Promise.resolve({
+          document_id: id,
+          document_type: 'purchase_contract',
+          extracted_data: {},
+          needs_review_items: [],
+        } as ExtractedData);
+      }
+      return api.getExtractedData(id);
+    },
     enabled: !!id,
   });
 }
@@ -36,7 +59,12 @@ export function useDocumentExtraction(id: string) {
 export function useDocumentsNeedingReview() {
   return useQuery<Document[]>({
     queryKey: ['documents', 'review'],
-    queryFn: () => api.getReviewQueue(),
+    queryFn: () => {
+      if (DEMO_MODE) {
+        return Promise.resolve(mockDocumentsNeedingReview);
+      }
+      return api.getReviewQueue();
+    },
   });
 }
 

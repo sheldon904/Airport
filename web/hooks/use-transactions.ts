@@ -1,11 +1,16 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { DEMO_MODE, mockTransactions, mockDashboard } from '@/lib/mock-data';
 import { Transaction, DashboardData, CreateTransactionForm, Party } from '@/types';
 
 export function useTransactions(params?: { status?: string; limit?: number; offset?: number }) {
   return useQuery<Transaction[]>({
     queryKey: ['transactions', params],
     queryFn: async () => {
+      if (DEMO_MODE) {
+        const limit = params?.limit || 20;
+        return mockTransactions.slice(0, limit);
+      }
       const result = await api.listTransactions(1, params?.limit || 20, params?.status);
       return result.items || result;
     },
@@ -15,7 +20,13 @@ export function useTransactions(params?: { status?: string; limit?: number; offs
 export function useTransaction(id: string) {
   return useQuery({
     queryKey: ['transactions', id],
-    queryFn: () => api.getTransaction(id),
+    queryFn: () => {
+      if (DEMO_MODE) {
+        const tx = mockTransactions.find(t => t.id === id);
+        return tx || mockTransactions[0];
+      }
+      return api.getTransaction(id);
+    },
     enabled: !!id,
   });
 }
@@ -23,7 +34,12 @@ export function useTransaction(id: string) {
 export function useDashboard() {
   return useQuery<DashboardData>({
     queryKey: ['dashboard'],
-    queryFn: () => api.getDashboard(),
+    queryFn: () => {
+      if (DEMO_MODE) {
+        return Promise.resolve(mockDashboard);
+      }
+      return api.getDashboard();
+    },
   });
 }
 

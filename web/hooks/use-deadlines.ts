@@ -1,11 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { DEMO_MODE, mockUpcomingDeadlines } from '@/lib/mock-data';
 import { Deadline, CreateDeadlineForm, UpcomingDeadline } from '@/types';
 
 export function useDeadlines(transactionId?: string, params?: { status?: string; upcoming_days?: number }) {
   return useQuery<Deadline[]>({
     queryKey: ['deadlines', transactionId, params],
     queryFn: async () => {
+      if (DEMO_MODE) {
+        return mockUpcomingDeadlines as unknown as Deadline[];
+      }
       if (params?.upcoming_days) {
         return api.getUpcomingDeadlines(params.upcoming_days);
       }
@@ -20,7 +24,13 @@ export function useDeadlines(transactionId?: string, params?: { status?: string;
 export function useDeadline(id: string) {
   return useQuery<Deadline>({
     queryKey: ['deadlines', 'detail', id],
-    queryFn: () => api.getDeadline(id),
+    queryFn: () => {
+      if (DEMO_MODE) {
+        const dl = mockUpcomingDeadlines.find(d => d.id === id);
+        return (dl || mockUpcomingDeadlines[0]) as unknown as Deadline;
+      }
+      return api.getDeadline(id);
+    },
     enabled: !!id,
   });
 }
@@ -28,7 +38,12 @@ export function useDeadline(id: string) {
 export function useUpcomingDeadlines(days: number = 7) {
   return useQuery<UpcomingDeadline[]>({
     queryKey: ['deadlines', 'upcoming', days],
-    queryFn: () => api.getUpcomingDeadlines(days),
+    queryFn: () => {
+      if (DEMO_MODE) {
+        return Promise.resolve(mockUpcomingDeadlines);
+      }
+      return api.getUpcomingDeadlines(days);
+    },
   });
 }
 

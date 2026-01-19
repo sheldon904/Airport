@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from './api';
+import { DEMO_MODE, mockUser } from './mock-data';
 import type { User, TokenResponse } from '@/types';
 
 interface AuthContextType {
@@ -29,6 +30,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Check for existing session
     const checkAuth = async () => {
+      // Demo mode - auto authenticate
+      if (DEMO_MODE) {
+        setUser(mockUser);
+        setIsLoading(false);
+        return;
+      }
+
       const token = api.getAccessToken();
       if (token) {
         try {
@@ -45,6 +53,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = async (email: string, password: string) => {
+    if (DEMO_MODE) {
+      setUser(mockUser);
+      router.push('/dashboard');
+      return;
+    }
     const tokens = await api.login(email, password);
     api.setTokens(tokens);
     const userData = await api.getCurrentUser();
@@ -58,6 +71,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     admin_password: string;
     admin_name: string;
   }) => {
+    if (DEMO_MODE) {
+      setUser(mockUser);
+      router.push('/dashboard');
+      return;
+    }
     const response = await api.register(data);
     api.setTokens(response.tokens);
     setUser(response.user);
@@ -65,6 +83,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => {
+    if (DEMO_MODE) {
+      setUser(null);
+      router.push('/auth/login');
+      return;
+    }
     api.clearTokens();
     setUser(null);
     router.push('/auth/login');
