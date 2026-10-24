@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -242,7 +243,7 @@ class AuthService:
         try:
             payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
             return payload
-        except JWTError:
+        except PyJWTError:
             return None
 
     async def refresh_tokens(self, refresh_token: str) -> TokenPair | None:

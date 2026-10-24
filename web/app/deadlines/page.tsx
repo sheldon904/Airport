@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useDeadlines, useCompleteDeadline, useWaiveDeadline, useExtendDeadline } from '@/hooks';
 import {
@@ -316,7 +316,7 @@ function DeadlineRow({
   );
 }
 
-export default function DeadlinesPage() {
+function DeadlinesPageContent() {
   const searchParams = useSearchParams();
   const transactionId = searchParams.get('transaction');
   const [statusFilter, setStatusFilter] = useState('');
@@ -489,5 +489,14 @@ export default function DeadlinesPage() {
         )}
       </div>
     </DashboardLayout>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for static prerendering (Next.js 15).
+export default function DeadlinesPage() {
+  return (
+    <Suspense fallback={null}>
+      <DeadlinesPageContent />
+    </Suspense>
   );
 }
