@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useTransactions, useCreateTransaction } from '@/hooks';
 import {
@@ -222,7 +222,7 @@ function CreateTransactionModal({
   );
 }
 
-export default function TransactionsPage() {
+function TransactionsPageContent() {
   const searchParams = useSearchParams();
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -384,5 +384,14 @@ export default function TransactionsPage() {
         onClose={() => setIsModalOpen(false)}
       />
     </DashboardLayout>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for static prerendering (Next.js 15).
+export default function TransactionsPage() {
+  return (
+    <Suspense fallback={null}>
+      <TransactionsPageContent />
+    </Suspense>
   );
 }
